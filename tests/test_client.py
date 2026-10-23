@@ -244,3 +244,91 @@ async def test_admins_from_platesh_pass_paywall(paid_env):
 
     await dp2.feed_update(own_bot, text_update("я админ"))
     assert seen == ["я админ"]
+
+
+# ---------------------------------------------------------------------- Telegram Business (боты-архиваторы)
+
+OWNER = 7001
+CUSTOMER = 7002
+
+
+def business_dispatcher(client):
+    from aiogram.types import BusinessConnection, BusinessMessagesDeleted
+
+    dp = Dispatcher()
+    dp.include_router(client.router())
+    client.install_paywall(dp, products=["premium"])
+    seen = []
+
+    @dp.business_connection()
+    async def on_connection(event: BusinessConnection) -> None:
+        seen.append(("connection", event.user.id))
+
+    @dp.business_message()
+    async def on_business_message(message: Message) -> None:
+        seen.append(("message", message.text))
+
+    @dp.deleted_business_messages()
+    async def on_deleted(event: BusinessMessagesDeleted) -> None:
+        seen.append(("deleted", event.message_ids))
+
+    return dp, seen
+
+
+def business_message(text, connection="bc1"):
+    # Сообщение от клиента владельцу аккаунта — бот видит его через бизнес-подключение.
+    return Update(update_id=next(_ids), business_message=Message(
+        message_id=next(_ids), date=datetime.datetime.now(), chat=Chat(id=CUSTOMER, type="private"),
+        from_user=User(id=CUSTOMER, is_bot=False, first_name="клиент"), text=text, business_connection_id=connection,
+    ))
+
+
+def offers_to(bot, user_id):
+    return [m.text for m in bot.session.calls(SendMessage) if m.chat_id == user_id]
+
+
+async def test_business_archiving_needs_owner_payment(paid_env):
+    from aiogram.types import BusinessMessagesDeleted
+
+    env, client, own_bot, _, _ = paid_env
+    own_bot.session.business["bc1"] = OWNER
+    dp, seen = business_dispatcher(client)
+
+    await dp.feed_update(own_bot, business_message("привет"))
+    await dp.feed_update(own_bot, business_message("ещё одно"))
+    deleted = Update(update_id=next(_ids), deleted_business_messages=BusinessMessagesDeleted(
+        business_connection_id="bc1", chat=Chat(id=CUSTOMER, type="private"), message_ids=[1, 2]))
+    await dp.feed_update(own_bot, deleted)
+    assert seen == []  # без оплаты переписка боту не передаётся
+    offers = offers_to(own_bot, OWNER)
+    assert len(offers) == 1 and "сохранять переписку начнёт только после оплаты" in offers[0]  # без спама
+    assert offers_to(own_bot, CUSTOMER) == []  # клиенту владельца ничего не пишем
+
+    await env.db.save_access(Access("ext", OWNER, "premium", expires_at=int(time.time()) + 3600))
+    client.forget(OWNER)
+    await dp.feed_update(own_bot, business_message("после оплаты"))
+    assert seen == [("message", "после оплаты")]
+
+
+async def test_business_connection_passes_and_offers_payment(paid_env):
+    from aiogram.types import BusinessConnection
+
+    env, client, own_bot, _, _ = paid_env
+    dp, seen = business_dispatcher(client)
+    connection = BusinessConnection(id="bc2", user=User(id=OWNER, is_bot=False, first_name="o"),
+                                    user_chat_id=OWNER, date=datetime.datetime.now(), is_enabled=True)
+    await dp.feed_update(own_bot, Update(update_id=next(_ids), business_connection=connection))
+    assert seen == [("connection", OWNER)]  # код бота должен узнать о подключении
+    assert len(offers_to(own_bot, OWNER)) == 1
+    # Владелец уже известен по событию подключения — лишний запрос в Telegram не нужен.
+    await dp.feed_update(own_bot, business_message("x", connection="bc2"))
+    assert seen == [("connection", OWNER)]
+
+
+async def test_business_admin_is_exempt(paid_env):
+    env, client, own_bot, _, _ = paid_env
+    own_bot.session.business["bc3"] = OWNER
+    client.admins = {OWNER}
+    dp, seen = business_dispatcher(client)
+    await dp.feed_update(own_bot, business_message("админ", connection="bc3"))
+    assert seen == [("message", "админ")]

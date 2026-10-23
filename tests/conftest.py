@@ -8,9 +8,10 @@ import pytest
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.base import BaseSession
-from aiogram.methods import GetChat, GetChatMember, GetMe, TelegramMethod
+from aiogram.methods import GetBusinessConnection, GetChat, GetChatMember, GetMe, TelegramMethod
 from aiogram.types import (
     AcceptedGiftTypes,
+    BusinessConnection,
     Chat,
     ChatFullInfo,
     ChatInviteLink,
@@ -63,6 +64,7 @@ class MockSession(BaseSession):
         # Участники чатов: (chat_id, user_id) -> статус. Сам бот по умолчанию — админ со всеми правами.
         self.members: dict[tuple[int, int], Any] = {}
         self.chat_info: dict[str, Any] = {"title": "VIP канал", "has_protected_content": True}
+        self.business: dict[str, int] = {}  # business_connection_id -> владелец аккаунта
 
     async def close(self) -> None:
         pass
@@ -79,6 +81,12 @@ class MockSession(BaseSession):
             if member is None:
                 member = "administrator" if method.user_id == bot.id else "left"
             return chat_member(member, method.user_id) if isinstance(member, str) else member
+        if isinstance(method, GetBusinessConnection):
+            owner = self.business[method.business_connection_id]
+            return BusinessConnection(
+                id=method.business_connection_id, user=User(id=owner, is_bot=False, first_name="owner"),
+                user_chat_id=owner, date=datetime.datetime.now(), is_enabled=True,
+            )
         if isinstance(method, GetChat):
             return ChatFullInfo(
                 id=method.chat_id, type="channel", accent_color_id=0, max_reaction_count=11,

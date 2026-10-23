@@ -46,6 +46,9 @@ ACCESS_TTL = 60  # сколько секунд помнить «доступ е�
 NO_ACCESS_TTL = 5  # и «доступа нет» (коротко, чтобы оплата криптой подхватывалась быстро)
 
 PAYWALL_TEXT = "🔒 Этот бот доступен после оплаты. Выбери вариант:"
+BUSINESS_TEXT = ("🔒 Бот подключён к твоему аккаунту, но сохранять переписку начнёт только после оплаты. "
+                 "Выбери вариант:")
+BUSINESS_REMIND_EVERY = 6 * 3600  # напоминать владельцу аккаунта не чаще раза в 6 часов
 UNAVAILABLE_TEXT = "Сервис оплаты временно недоступен, попробуй через минуту."
 
 
@@ -63,6 +66,8 @@ class PlateshClient:
         self._session: aiohttp.ClientSession | None = None
         self._access_cache: dict[tuple[int, str | None, int | None], tuple[bool, float]] = {}
         self._bot_info: dict[str, Any] | None = None
+        self._business_owners: dict[str, int] = {}  # business_connection_id -> владелец аккаунта
+        self._business_reminded: dict[int, float] = {}
 
     @classmethod
     def from_env(cls, **kwargs: Any) -> PlateshClient:
@@ -312,22 +317,76 @@ class PlateshClient:
 
         return router
 
+    async def _business_owner(self, bot: Any, connection_id: str) -> int | None:
+        """Владелец бизнес-аккаунта, к которому подключён бот (кэшируется)."""
+        if connection_id not in self._business_owners:
+            from aiogram.exceptions import TelegramAPIError
+
+            try:
+                connection = await bot.get_business_connection(connection_id)
+            except TelegramAPIError as exc:
+                log.warning("Не удалось узнать владельца бизнес-подключения %s: %s", connection_id, exc)
+                return None
+            self._business_owners[connection_id] = connection.user.id
+        return self._business_owners[connection_id]
+
     def paywall(self, products: Iterable[str] | None = None, *, allow_commands: Iterable[str] = ("paysupport", "terms"),
-                exempt_users: Iterable[int] = (), text: str = PAYWALL_TEXT):
-        """Middleware aiogram: в личке бот отвечает только тем, у кого оплачен доступ.
+                exempt_users: Iterable[int] = (), text: str = PAYWALL_TEXT, business_text: str = BUSINESS_TEXT):
+        """Middleware aiogram: бот работает только для тех, у кого оплачен доступ.
+
+        - сообщения и кнопки в личке: без оплаты — предложение оплатить;
+        - Telegram Business (бот подключён к аккаунту пользователя): пока владелец аккаунта не оплатил,
+          его переписка боту не передаётся (бот её не обрабатывает и не сохраняет), а владелец
+          получает предложение оплатить (не чаще раза в 6 часов).
 
         products — какие товары открывают бота (None — любой оплаченный товар).
         """
         from aiogram import BaseMiddleware
-        from aiogram.types import CallbackQuery, Message
+        from aiogram.types import BusinessConnection, BusinessMessagesDeleted, CallbackQuery, Message
 
         client = self
         products = list(products) if products else None
         allowed = {f"/{c.lstrip('/')}" for c in allow_commands}
         exempt = set(exempt_users) | self.admins
 
+        async def remind_owner(bot: Any, owner_id: int) -> None:
+            last = client._business_reminded.get(owner_id)
+            if last is not None and time.monotonic() - last < BUSINESS_REMIND_EVERY:
+                return
+            client._business_reminded[owner_id] = time.monotonic()
+            with suppress(Exception):
+                await bot.send_message(owner_id, business_text, reply_markup=await client.offer_markup(products))
+
+        async def business(handler: Callable[..., Awaitable[Any]], event: Any, data: dict[str, Any]) -> Any:
+            bot = data["bot"]
+            if isinstance(event, BusinessConnection):
+                client._business_owners[event.id] = event.user.id
+                owner = event.user.id
+            else:
+                owner = await client._business_owner(bot, event.business_connection_id)
+            if owner is None or owner in exempt:
+                return await handler(event, data)
+            try:
+                paid = await client.has_any_access(owner, products)
+            except (PlateshError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                # Platesh недоступен: лучше временно поработать бесплатно, чем потерять переписку оплатившего.
+                log.warning("Platesh недоступен, бизнес-сообщение пропущено без проверки: %s", exc)
+                return await handler(event, data)
+            if paid:
+                return await handler(event, data)
+            if isinstance(event, BusinessConnection):
+                if event.is_enabled:
+                    await remind_owner(bot, owner)
+                return await handler(event, data)  # само подключение пропускаем — код бота его запомнит
+            await remind_owner(bot, owner)
+            return None  # без оплаты переписку не обрабатываем
+
         class Paywall(BaseMiddleware):
             async def __call__(self, handler: Callable[..., Awaitable[Any]], event: Any, data: dict[str, Any]) -> Any:
+                if isinstance(event, (BusinessConnection, BusinessMessagesDeleted)) or (
+                    isinstance(event, Message) and event.business_connection_id
+                ):
+                    return await business(handler, event, data)
                 if isinstance(event, Message):
                     chat, user = event.chat, event.from_user
                     if event.successful_payment or (event.text and event.text.split()[0].split("@")[0] in allowed):
@@ -356,8 +415,10 @@ class PlateshClient:
 
     def install_paywall(self, dp: Any, products: Iterable[str] | None = None, **kwargs: Any) -> None:
         middleware = self.paywall(products, **kwargs)
-        dp.message.outer_middleware(middleware)
-        dp.callback_query.outer_middleware(middleware)
+        for observer in ("message", "callback_query", "business_connection", "business_message",
+                         "edited_business_message", "deleted_business_messages"):
+            if hasattr(dp, observer):  # Telegram Business есть в aiogram 3.7+
+                getattr(dp, observer).outer_middleware(middleware)
 
 
 def verify_webhook(body: bytes, signature: str | None, secret: str) -> bool:
