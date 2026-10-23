@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
@@ -13,6 +14,7 @@ from aiogram.types import User
 from aiogram.utils.token import TokenValidationError
 
 from ..config import BotConfig
+from ..net import proxy_errors
 
 log = logging.getLogger(__name__)
 
@@ -99,8 +101,18 @@ class BotRegistry:
             await rt.bot.session.close()
 
 
+class ProxySession(AiohttpSession):
+    """Ошибки прокси (не пустил, не отвечает) превращаем в обычное «нет связи с Telegram»."""
+
+    async def make_request(self, bot: Bot, method: Any, timeout: int | None = None) -> Any:
+        try:
+            return await super().make_request(bot, method, timeout)
+        except proxy_errors() as exc:
+            raise TelegramNetworkError(method=method, message=f"прокси не пропускает соединение ({exc})") from exc
+
+
 def create_bot(token: str, proxy: str | None = None) -> Bot:
-    session = AiohttpSession(proxy=proxy) if proxy else None
+    session = ProxySession(proxy=proxy) if proxy else None
     return Bot(token, session=session, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
 

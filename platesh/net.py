@@ -51,6 +51,15 @@ def mask_proxy(proxy: str) -> str:
     return f"{parts.scheme}://{host}{port}"
 
 
+def proxy_errors() -> tuple[type[BaseException], ...]:
+    """Ошибки библиотеки прокси: они не наследуют ошибки aiohttp, поэтому ловим их отдельно."""
+    try:
+        from aiohttp_socks import ProxyConnectionError, ProxyError, ProxyTimeoutError
+    except ImportError:
+        return ()
+    return ProxyError, ProxyConnectionError, ProxyTimeoutError
+
+
 def proxy_connector(proxy: str):
     """aiohttp-коннектор через прокси (HTTP, SOCKS4/5). Создавать внутри работающего event loop."""
     from aiohttp_socks import ProxyConnector

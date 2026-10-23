@@ -11,7 +11,7 @@ from typing import Any
 
 import aiohttp
 
-from .net import proxy_connector
+from .net import proxy_connector, proxy_errors
 from .texts import format_amount
 
 log = logging.getLogger(__name__)
@@ -70,7 +70,7 @@ class CryptoPayClient:
                     data = await resp.json(content_type=None)
                 except ValueError:
                     raise CryptoPayError(method, resp.status, f"HTTP {resp.status}") from None
-        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        except (aiohttp.ClientError, asyncio.TimeoutError, *proxy_errors()) as exc:
             raise CryptoPayError(method, None, f"нет связи с CryptoBot: {exc}") from exc
         if not isinstance(data, dict) or not data.get("ok"):
             error = data.get("error", {}) if isinstance(data, dict) else {}

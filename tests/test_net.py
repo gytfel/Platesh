@@ -55,3 +55,41 @@ async def test_clients_use_proxy_connector():
     session = await bot.session.create_session()
     assert isinstance(session.connector, ProxyConnector)
     await bot.session.close()
+
+
+async def test_refusing_proxy_means_no_connection_not_crash():
+    """Прокси отказал (403) или не запущен — это «нет связи», а не падение с трассировкой."""
+    import asyncio
+
+    from aiogram.exceptions import TelegramNetworkError
+    from aiohttp import web
+
+    from platesh.bots.registry import create_bot
+    from platesh.cryptopay import CryptoPayClient, CryptoPayError
+
+    async def refuse(request):
+        return web.Response(status=403, text="Forbidden")
+
+    app = web.Application()
+    app.router.add_route("*", "/{tail:.*}", refuse)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+    try:
+        for proxy in (f"http://127.0.0.1:{port}", "socks5://127.0.0.1:1"):  # отказ и «никто не слушает»
+            bot = create_bot("123:abc", proxy)
+            try:
+                with pytest.raises(TelegramNetworkError):
+                    await asyncio.wait_for(bot.get_me(), 15)
+            finally:
+                await bot.session.close()
+            client = CryptoPayClient("t", proxy=proxy)
+            try:
+                with pytest.raises(CryptoPayError, match="нет связи"):
+                    await client.get_me()
+            finally:
+                await client.close()
+    finally:
+        await runner.cleanup()
