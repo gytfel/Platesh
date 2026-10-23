@@ -6,7 +6,7 @@
 
 database: data/platesh.db
 
-# Твой Telegram ID (@userinfobot). Получаешь уведомления об оплатах и команды /stats, /grant...
+# Твой Telegram ID (@userinfobot): сюда придут уведомления об оплатах.
 admins: [123456789]
 
 server:
