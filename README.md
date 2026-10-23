@@ -49,10 +49,19 @@
 
 Нужен Python 3.10 или новее (на Windows при установке отметь «Add Python to PATH»).
 
+**Windows (PowerShell)** — каждую команду отдельно, нажимая Enter после каждой:
+```powershell
+git clone -b claude/beautiful-johnson-i6jquz https://github.com/gytfel/Platesh.git
+cd Platesh
+.\run.bat
+```
+Нет git — скачай архив: [Platesh (zip)](https://github.com/gytfel/Platesh/archive/refs/heads/claude/beautiful-johnson-i6jquz.zip), распакуй и дважды щёлкни `run.bat` в распакованной папке.
+
+**Linux / macOS:**
 ```bash
 git clone -b claude/beautiful-johnson-i6jquz https://github.com/gytfel/Platesh.git
 cd Platesh
-./run.sh          # Windows: run.bat
+./run.sh
 ```
 
 При первом запуске Platesh установит зависимости и **задаст вопросы прямо в терминале**: твой Telegram ID, токен CryptoBot, токены ботов, цену и срок доступа, где лежит код бота. Токены он сразу проверит, ключи придумает сам, сохранит всё в `config.yaml` и `.env` и покажет, какие строки добавить в код каждого бота. Потом предложит запуститься.
@@ -66,7 +75,7 @@ cd Platesh
 | `./run.sh check` | Проверить токены, CryptoBot и закрытые каналы |
 | `./run.sh genkey` | Придумать надёжный ключ API |
 
-На Windows всё то же через `run.bat`: `run.bat setup`, `run.bat check`.
+На Windows всё то же через `run.bat`: в PowerShell `.\run.bat setup`, `.\run.bat check`.
 
 **Вручную, без скриптов:**
 ```bash

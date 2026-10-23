@@ -151,7 +151,24 @@ def test_input_validation(tmp_path):
 
 
 def test_find_python_prefers_bot_venv(tmp_path):
-    exe = tmp_path / ".venv" / "bin" / "python"
+    exe = tmp_path / "my venv" / ".venv" / "Scripts" / "python.exe"
     exe.parent.mkdir(parents=True)
     exe.write_text("")
-    assert setup_wizard.find_python(tmp_path) == str(exe)
+    assert setup_wizard.find_python(tmp_path / "my venv") == f'"{exe}"'  # путь с пробелом — в кавычках
+
+
+@pytest.mark.parametrize("found, expected", [
+    ({"python": r"C:\Python312\python.exe", "py": r"C:\Windows\py.exe"}, "python"),
+    # «Пустышка» из Microsoft Store — пропускаем, берём py
+    ({"python": r"C:\Users\A\AppData\Local\Microsoft\WindowsApps\python.exe", "py": r"C:\Windows\py.exe"}, "py -3"),
+    ({"py": r"C:\Windows\py.exe"}, "py -3"),
+])
+def test_find_python_on_windows(tmp_path, monkeypatch, found, expected):
+    monkeypatch.setattr(setup_wizard.shutil, "which", lambda name: found.get(name))
+    assert setup_wizard.find_python(tmp_path, windows=True) == expected
+
+
+def test_windows_command_is_split_correctly(tmp_path):
+    from platesh.config import split_command
+
+    assert split_command('py -3 bot.py') == ("py", "-3", "bot.py")

@@ -79,15 +79,23 @@ def check_crypto_token(token: str) -> tuple[str, str, bool]:
     return status, info, False
 
 
-def find_python(bot_dir: Path) -> str:
-    """Python для бота: его виртуальное окружение, если есть, иначе системный."""
+def find_python(bot_dir: Path, *, windows: bool = os.name == "nt") -> str:
+    """Чем запускать бота (готовый кусок команды): его виртуальное окружение, если есть, иначе системный Python."""
     for venv in (".venv", "venv", "env"):
         for exe in ("Scripts/python.exe", "bin/python"):
             candidate = bot_dir / venv / exe
             if candidate.is_file():
-                return str(candidate)
-    system = "python" if os.name == "nt" else "python3"
-    return system if shutil.which(system) else sys.executable
+                return quote(str(candidate))
+    if windows:
+        found = shutil.which("python")
+        # В Windows есть «пустышка» python из WindowsApps — она открывает Microsoft Store, а не запускает код.
+        if found and "windowsapps" not in found.lower():
+            return "python"
+        if shutil.which("py"):
+            return "py -3"  # установщик с python.org по умолчанию ставит только py, без python в PATH
+    elif shutil.which("python3"):
+        return "python3"
+    return quote(sys.executable)
 
 
 def free_port(start: int = DEFAULT_PORT) -> int:
@@ -275,7 +283,7 @@ class Wizard:
                 break
             self.say(f"  Файл не найден: {script}")
         setup.script = script
-        default_cmd = f"{quote(find_python(script.parent))} {quote(script.name)}"
+        default_cmd = f"{find_python(script.parent)} {quote(script.name)}"
         setup.command = self.ask(f"Команда запуска (в папке {script.parent})", default_cmd)
         return setup
 
