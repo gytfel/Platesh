@@ -35,15 +35,17 @@ class Terminal:
         return "\n".join(self.output)
 
 
-def fake_bot_check(token):
+def fake_bot_check(token, proxy=None):
     if token == "bad":
         return "invalid", "Telegram не принял токен"
     if token == "333:offline":
         return "offline", "нет сети"
+    if token == "444:blocked":  # Telegram доступен только через прокси
+        return ("ok", "proxied_bot") if proxy == "socks5://127.0.0.1:10808" else ("offline", "таймаут")
     return "ok", {"111:AAA": "My_Bot", "222:BBB": "shop_bot"}.get(token, "other_bot")
 
 
-def fake_crypto_check(token):
+def fake_crypto_check(token, proxy=None):
     return "ok", "Мой магазин", False
 
 
@@ -104,7 +106,8 @@ def test_paywall_and_shop_bots(tmp_path):
 def test_minimal_stars_only_and_manual_start(tmp_path):
     w, term = wizard(tmp_path, [
         "42", "",                       # ID, без крипты
-        "333:offline",                  # Telegram недоступен — сохраняем как есть
+        "333:offline", "",              # Telegram недоступен; Enter — проверить ещё раз
+        "-",                            # всё ещё нет — сохранить без проверки
         "1", "Премиум", "100", "7",
         "",                             # бота запускаю сам
         "н", "д",                       # больше ботов нет, запустить сейчас
@@ -172,3 +175,19 @@ def test_windows_command_is_split_correctly(tmp_path):
     from platesh.config import split_command
 
     assert split_command('py -3 bot.py') == ("py", "-3", "bot.py")
+
+
+def test_blocked_telegram_proxy_is_offered_and_saved(tmp_path, monkeypatch):
+    monkeypatch.setattr(setup_wizard, "resolve_proxy", lambda value: value)  # без системного прокси
+    w, term = wizard(tmp_path, [
+        "42", "",
+        "444:blocked",
+        "127.0.0.1:1",                  # неверный прокси — всё ещё нет связи
+        "socks5://127.0.0.1:10808",     # правильный
+        "", "", "100", "", "", "н", "н",
+    ])
+    w.run()
+    assert "заблокирован у провайдера" in term.text and "Пробую через прокси" in term.text
+    cfg = load_config(tmp_path / "config.yaml")
+    assert cfg.proxy == "socks5://127.0.0.1:10808"
+    assert cfg.bots[0].name == "proxied_bot"

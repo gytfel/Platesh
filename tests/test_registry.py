@@ -15,7 +15,7 @@ from .conftest import EXT_TOKEN, make_bot, make_raw_config
 def bots(monkeypatch):
     created = {}
 
-    def fake_create_bot(token):
+    def fake_create_bot(token, proxy=None):
         created[token] = make_bot(token)
         return created[token]
 
@@ -36,7 +36,7 @@ async def test_connect_all(bots, configs):
 
 
 async def test_rejected_token_is_skipped(bots, configs, monkeypatch):
-    def create(token):
+    def create(token, proxy=None):
         bot = make_bot(token)
         if token == EXT_TOKEN:
             bot.session.errors[GetMe] = TelegramUnauthorizedError(GetMe(), "Unauthorized")
@@ -48,7 +48,7 @@ async def test_rejected_token_is_skipped(bots, configs, monkeypatch):
 
 
 async def test_network_failure_aborts_start(configs, monkeypatch):
-    def create(token):
+    def create(token, proxy=None):
         bot = make_bot(token)
         bot.session.errors[GetMe] = TelegramNetworkError(GetMe(), "DNS error")
         return bot

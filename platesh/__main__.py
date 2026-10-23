@@ -16,19 +16,22 @@ from .access import diagnose
 from .bots.registry import BotRuntime, create_bot
 from .config import CRYPTO, MIN_KEY_LENGTH, STARS, Config, ConfigError, load_config, weak_keys
 from .cryptopay import CryptoPayClient, CryptoPayError
+from .net import mask_proxy
 
 
 async def check(cfg: Config) -> bool:
     """Проверяет токены ботов и CryptoBot, печатает сводку."""
     good = True
     crypto_checked: dict[tuple[str, bool], str] = {}
+    proxy = cfg.proxy_url
     print(f"База данных: {cfg.database}")
+    print(f"Связь с Telegram: {'через прокси ' + mask_proxy(proxy) if proxy else 'напрямую'}")
     print(f"HTTP API: {'выключен' if not cfg.server.enabled else f'{cfg.server.host}:{cfg.server.port}'}"
           f"{'' if cfg.server.api_key or not cfg.server.enabled else ' (api_key не задан — /api/* отключён)'}")
     print()
     for b in cfg.bots:
         try:
-            bot = create_bot(b.token)
+            bot = create_bot(b.token, proxy)
         except TokenValidationError:
             print(f"❌ {b.name}: неверный формат токена")
             good = False
@@ -49,7 +52,7 @@ async def check(cfg: Config) -> bool:
         if b.method_enabled(CRYPTO):
             key = (b.crypto.token, b.crypto.testnet)
             if key not in crypto_checked:
-                client = CryptoPayClient(b.crypto.token, testnet=b.crypto.testnet)
+                client = CryptoPayClient(b.crypto.token, testnet=b.crypto.testnet, proxy=proxy)
                 try:
                     app = await client.get_me()
                     crypto_checked[key] = f"CryptoBot «{app.get('name')}»{' testnet' if b.crypto.testnet else ''}"
@@ -75,14 +78,25 @@ async def check(cfg: Config) -> bool:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="platesh", description="Платёжный шлюз Stars + CryptoBot для Telegram-ботов")
-    parser.add_argument("command", nargs="?", default="run", choices=["run", "check", "setup", "genkey"],
-                        help="run — запустить, setup — настроить (вопросы в терминале), "
-                             "check — проверить настройки, genkey — придумать ключ API")
+    parser.add_argument("command", nargs="?", default="run", choices=["run", "check", "setup", "update", "genkey"],
+                        help="run — запустить, setup — настроить (вопросы в терминале), check — проверить настройки, "
+                             "update — скачать новую версию, genkey — придумать ключ API")
     parser.add_argument("-c", "--config", default="config.yaml", help="путь к config.yaml")
     args = parser.parse_args(argv)
 
     if args.command == "genkey":
         print(secrets.token_urlsafe(32))
+        return
+
+    if args.command == "update":
+        from .updater import UpdateError, update
+
+        try:
+            count = update(Path(__file__).resolve().parent.parent)
+        except UpdateError as exc:
+            print(f"Ошибка: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(f"✅ Готово, обновлено файлов: {count}. Настройки и база не тронуты. Запускай как обычно.")
         return
 
     config_path = Path(args.config).expanduser().resolve()

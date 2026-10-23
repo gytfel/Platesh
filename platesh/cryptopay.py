@@ -11,6 +11,7 @@ from typing import Any
 
 import aiohttp
 
+from .net import proxy_connector
 from .texts import format_amount
 
 log = logging.getLogger(__name__)
@@ -37,16 +38,18 @@ def verify_signature(token: str, body: bytes, signature: str | None) -> bool:
 
 
 class CryptoPayClient:
-    def __init__(self, token: str, *, testnet: bool = False, base_url: str | None = None) -> None:
+    def __init__(self, token: str, *, testnet: bool = False, base_url: str | None = None, proxy: str | None = None) -> None:
         self.token = token
         self.testnet = testnet
+        self.proxy = proxy
         self.base_url = (base_url or (TESTNET_URL if testnet else MAINNET_URL)).rstrip("/")
         self._session: aiohttp.ClientSession | None = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(
-                trust_env=True, timeout=aiohttp.ClientTimeout(total=20)
+                connector=proxy_connector(self.proxy) if self.proxy else None,
+                timeout=aiohttp.ClientTimeout(total=20),
             )
         return self._session
 

@@ -32,6 +32,9 @@ def bot_env(cfg: Config, rt: BotRuntime) -> dict[str, str]:
     })
     if rt.cfg.api_key:
         env["PLATESH_KEY"] = rt.cfg.api_key
+    proxy = cfg.proxy_url
+    if proxy:
+        env["PLATESH_PROXY"] = proxy  # твоему боту тоже нужен путь до Telegram: AiohttpSession(proxy=...)
     return env
 
 

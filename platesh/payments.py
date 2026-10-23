@@ -56,6 +56,7 @@ class PaymentService:
         self.registry = registry
         self.notifier = notifier
         self.access = AccessService(db, registry, notifier)
+        self.proxy = cfg.proxy_url
         self._crypto_factory = crypto_factory
         self._crypto: dict[tuple[str, bool], CryptoPayClient] = {}
         self._known_users: dict[tuple[str, int], tuple[str | None, str | None]] = {}
@@ -68,7 +69,7 @@ class PaymentService:
             raise PaymentError(rt.cfg.text("method_unavailable"))
         key = (c.token, c.testnet)
         if key not in self._crypto:
-            self._crypto[key] = self._crypto_factory(c.token, testnet=c.testnet)
+            self._crypto[key] = self._crypto_factory(c.token, testnet=c.testnet, proxy=self.proxy)
         return self._crypto[key]
 
     def crypto_clients(self) -> list[CryptoPayClient]:

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramAPIError, TelegramNetworkError
 from aiogram.types import User
@@ -16,6 +17,15 @@ from ..config import BotConfig
 log = logging.getLogger(__name__)
 
 NETWORK_RETRY_DELAYS = (2.0, 5.0, 10.0)
+NO_TELEGRAM_HINT = (
+    "\nНет связи с Telegram ({error}).\n"
+    "Похоже, api.telegram.org недоступен с этого компьютера (так бывает при блокировке у провайдера).\n"
+    "Что сделать:\n"
+    "  1) включи VPN в режиме «весь трафик» (TUN / VPN-режим) и запусти Platesh снова;\n"
+    "  2) или укажи прокси в config.yaml, например:  proxy: socks5://127.0.0.1:10808\n"
+    "     (адрес и порт смотри в настройках VPN-клиента: v2rayN, Hiddify, Clash...);\n"
+    "  3) надёжнее всего — запустить Platesh на сервере (VPS) за границей."
+)
 
 
 @dataclass
@@ -43,7 +53,8 @@ class BotRegistry:
         self._by_id = {rt.id: rt for rt in runtimes}
 
     @classmethod
-    async def connect(cls, configs: list[BotConfig], retry_delays: tuple[float, ...] = NETWORK_RETRY_DELAYS) -> BotRegistry:
+    async def connect(cls, configs: list[BotConfig], *, proxy: str | None = None,
+                      retry_delays: tuple[float, ...] = NETWORK_RETRY_DELAYS) -> BotRegistry:
         """Создаёт Bot для каждого токена и проверяет его через getMe.
 
         Бот, токен которого Telegram отклонил, пропускается (с ошибкой в логе), остальные работают.
@@ -52,7 +63,7 @@ class BotRegistry:
         runtimes = []
         for cfg in configs:
             try:
-                bot = create_bot(cfg.token)
+                bot = create_bot(cfg.token, proxy)
             except TokenValidationError:
                 log.error("Бот «%s»: неверный формат токена — пропущен", cfg.name)
                 continue
@@ -62,7 +73,7 @@ class BotRegistry:
                 await bot.session.close()
                 for rt in runtimes:
                     await rt.bot.session.close()
-                raise SystemExit(f"Нет связи с Telegram: {exc}") from None
+                raise SystemExit(NO_TELEGRAM_HINT.format(error=exc.message)) from None
             except TelegramAPIError as exc:
                 log.error("Бот «%s»: Telegram отклонил токен (%s) — пропущен", cfg.name, exc.message)
                 await bot.session.close()
@@ -88,8 +99,9 @@ class BotRegistry:
             await rt.bot.session.close()
 
 
-def create_bot(token: str) -> Bot:
-    return Bot(token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+def create_bot(token: str, proxy: str | None = None) -> Bot:
+    session = AiohttpSession(proxy=proxy) if proxy else None
+    return Bot(token, session=session, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
 
 async def _get_me(bot: Bot, retry_delays: tuple[float, ...]) -> User:

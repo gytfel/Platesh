@@ -114,9 +114,10 @@ class FakeCrypto:
 
     instances: list[FakeCrypto] = []
 
-    def __init__(self, token: str, *, testnet: bool = False) -> None:
+    def __init__(self, token: str, *, testnet: bool = False, proxy: str | None = None) -> None:
         self.token = token
         self.testnet = testnet
+        self.proxy = proxy
         self.invoices: dict[str, dict[str, Any]] = {}
         self.created: list[dict[str, Any]] = []
         self.fail: Exception | None = None

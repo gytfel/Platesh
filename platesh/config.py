@@ -168,6 +168,13 @@ class Config:
     server: ServerConfig = field(default_factory=ServerConfig)
     crypto_poll_interval: float = 10.0
     log_level: str = "INFO"
+    proxy: str | None = None  # auto (по умолчанию) | off | адрес прокси
+
+    @property
+    def proxy_url(self) -> str | None:
+        from .net import resolve_proxy
+
+        return resolve_proxy(self.proxy)
 
     def bot(self, name: str) -> BotConfig | None:
         return next((b for b in self.bots if b.name == name), None)
@@ -496,6 +503,7 @@ def parse_config(raw: Any, base_dir: Path) -> Config:
         server=server,
         crypto_poll_interval=poll,
         log_level=(_str(data, "log_level", "config", default="INFO")).upper(),
+        proxy=_str(data, "proxy", "config"),
     )
 
 

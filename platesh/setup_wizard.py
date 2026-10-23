@@ -20,6 +20,8 @@ from typing import Callable
 
 import yaml
 
+from .net import mask_proxy, normalize_proxy, resolve_proxy
+
 CLIENT_FILE = Path(__file__).resolve().parent.parent / "client" / "platesh_client.py"
 DEFAULT_PORT = 8080
 
@@ -31,11 +33,12 @@ class Aborted(Exception):
 # ---------------------------------------------------------------------- проверки токенов (сеть)
 
 
-def check_bot_token(token: str) -> tuple[str, str]:
+def check_bot_token(token: str, proxy: str | None = None) -> tuple[str, str]:
     """('ok', username) | ('invalid', причина) | ('offline', причина)."""
-    from aiogram import Bot
     from aiogram.exceptions import TelegramNetworkError, TelegramServerError, TelegramAPIError
     from aiogram.utils.token import TokenValidationError, validate_token
+
+    from .bots.registry import create_bot
 
     try:
         validate_token(token)
@@ -43,7 +46,7 @@ def check_bot_token(token: str) -> tuple[str, str]:
         return "invalid", "неверный формат — токен выглядит так: 1234567890:AAH..."
 
     async def get_me() -> tuple[str, str]:
-        bot = Bot(token)
+        bot = create_bot(token, proxy)
         try:
             me = await bot.get_me()
             return "ok", me.username or str(me.id)
@@ -57,12 +60,12 @@ def check_bot_token(token: str) -> tuple[str, str]:
     return asyncio.run(get_me())
 
 
-def check_crypto_token(token: str) -> tuple[str, str, bool]:
+def check_crypto_token(token: str, proxy: str | None = None) -> tuple[str, str, bool]:
     """('ok', имя приложения, testnet) | ('invalid', причина, False) | ('offline', причина, False)."""
     from .cryptopay import CryptoPayClient, CryptoPayError
 
     async def get_me(testnet: bool) -> tuple[str, str]:
-        client = CryptoPayClient(token, testnet=testnet)
+        client = CryptoPayClient(token, testnet=testnet, proxy=proxy)
         try:
             app = await client.get_me()
             return "ok", str(app.get("name") or "приложение")
@@ -161,6 +164,8 @@ class Wizard:
         self.say = say
         self.check_bot = check_bot
         self.check_crypto = check_crypto
+        self.proxy: str | None = None  # что записать в config.yaml (None — auto)
+        self.offline_ok = False  # пользователь решил не проверять токены без связи
 
     # ------------------------------------------------------------------ ввод
 
@@ -214,16 +219,37 @@ class Wizard:
             if not token:
                 return None, False, "USD"
             self.say("  Проверяю...")
-            status, info, testnet = self.check_crypto(token)
+            status, info, testnet = self.check_crypto(token, resolve_proxy(self.proxy))
             if status == "ok":
                 self.say(f"  ✅ Приложение «{info}»{' (тестовая сеть)' if testnet else ''}")
                 break
             if status == "offline":
-                self.say(f"  ⚠️ Не получилось проверить ({info}). Сохраню как есть — проверишь потом через check.")
+                self.say(f"  ⚠️ Нет связи с CryptoBot ({info}). Сохраню как есть — проверишь потом через check.")
                 break
             self.say(f"  ❌ {info}. Попробуй ещё раз.")
         currency = self.ask("Валюта цен для крипты (USD, EUR, RUB или монета USDT, TON)", "USD").upper()
         return token, testnet, currency
+
+    def handle_offline(self, token: str, error: str) -> tuple[str, str]:
+        """Telegram недоступен: предлагаем VPN или прокси и проверяем снова."""
+        self.say(
+            f"  ⚠️ Нет связи с Telegram ({error}).\n"
+            "  Похоже, api.telegram.org заблокирован у провайдера. Варианты:\n"
+            "    • включи VPN в режиме «весь трафик» и нажми Enter — проверю ещё раз;\n"
+            "    • или впиши адрес прокси из настроек VPN-клиента, например socks5://127.0.0.1:10808\n"
+            "      (v2rayN: 10808, Hiddify: 12334, Clash: 7890 — смотри «локальный порт» в настройках);\n"
+            "    • или «-», чтобы сохранить без проверки и разобраться потом."
+        )
+        answer = self.ask("Прокси / Enter / -")
+        if answer == "-":
+            self.offline_ok = True
+            return "offline", error
+        if answer:
+            self.proxy = normalize_proxy(answer)
+            self.say(f"  Пробую через прокси {mask_proxy(self.proxy)}...")
+        else:
+            self.say("  Проверяю ещё раз...")
+        return self.check_bot(token, resolve_proxy(self.proxy))
 
     def ask_bot(self, index: int, used_names: set[str], crypto: bool, currency: str) -> BotSetup:
         self.say(f"\n--- Бот №{index} ---")
@@ -233,13 +259,15 @@ class Wizard:
                 self.say("  Токен обязателен.")
                 continue
             self.say("  Проверяю...")
-            status, info = self.check_bot(token)
+            status, info = self.check_bot(token, resolve_proxy(self.proxy))
+            while status == "offline" and not self.offline_ok:
+                status, info = self.handle_offline(token, info)
             if status == "ok":
                 self.say(f"  ✅ @{info}")
                 username = info
                 break
             if status == "offline":
-                self.say(f"  ⚠️ Нет связи с Telegram ({info}). Сохраню как есть.")
+                self.say("  Сохраню токен без проверки.")
                 username = None
                 break
             self.say(f"  ❌ {info}. Попробуй ещё раз.")
@@ -294,6 +322,7 @@ class Wizard:
         config: dict = {
             "database": "data/platesh.db",
             "admins": [admin_id],
+            **({"proxy": self.proxy} if self.proxy else {}),
             "server": {
                 "host": "127.0.0.1",
                 "port": port,

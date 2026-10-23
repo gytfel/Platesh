@@ -17,6 +17,7 @@ from .bots.registry import BotRegistry
 from .bots.shop import bot_commands
 from .config import Config, weak_keys
 from .db import Database
+from .net import mask_proxy
 from .notifier import Notifier
 from .payments import PaymentService
 from .supervisor import BotProcess, start_bot_processes
@@ -71,7 +72,10 @@ async def _wait_for_stop_signal() -> None:
 
 async def run(cfg: Config) -> None:
     db = await Database.open(cfg.database)
-    registry = await BotRegistry.connect(cfg.bots)
+    proxy = cfg.proxy_url
+    if proxy:
+        log.info("Связь с Telegram и CryptoBot — через прокси %s", mask_proxy(proxy))
+    registry = await BotRegistry.connect(cfg.bots, proxy=proxy)
     if not registry.all():
         await db.close()
         raise SystemExit("Ни один бот не подключился — проверь токены в config.yaml")
