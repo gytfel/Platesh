@@ -33,29 +33,40 @@ class Aborted(Exception):
 # ---------------------------------------------------------------------- проверки токенов (сеть)
 
 
-def check_bot_token(token: str, proxy: str | None = None) -> tuple[str, str]:
-    """('ok', username) | ('invalid', причина) | ('offline', причина)."""
-    from aiogram.exceptions import TelegramNetworkError, TelegramServerError, TelegramAPIError
-    from aiogram.utils.token import TokenValidationError, validate_token
+TELEGRAM_API = "https://api.telegram.org"
+TOKEN_RE = re.compile(r"^\d{5,}:[A-Za-z0-9_-]{30,}$")
 
-    from .bots.registry import create_bot
 
-    try:
-        validate_token(token)
-    except TokenValidationError:
+def check_bot_token(token: str, proxy: str | None = None, api: str = TELEGRAM_API) -> tuple[str, str]:
+    """('ok', username) | ('invalid', причина) | ('offline', причина).
+
+    Обычный HTTP-запрос getMe без библиотеки aiogram: она тяжёлая, и на слабом сервере
+    её загрузка ради одной проверки подвешивает машину.
+    """
+    import aiohttp
+
+    from .net import proxy_connector, proxy_errors
+
+    token = token.strip()
+    if not TOKEN_RE.match(token):
         return "invalid", "неверный формат — токен выглядит так: 1234567890:AAH..."
 
     async def get_me() -> tuple[str, str]:
-        bot = create_bot(token, proxy)
+        timeout = aiohttp.ClientTimeout(total=20)
+        connector = proxy_connector(proxy) if proxy else None
         try:
-            me = await bot.get_me()
-            return "ok", me.username or str(me.id)
-        except (TelegramNetworkError, TelegramServerError) as exc:
-            return "offline", str(exc)
-        except TelegramAPIError as exc:
-            return "invalid", f"Telegram не принял токен ({exc.message})"
-        finally:
-            await bot.session.close()
+            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                async with session.get(f"{api}/bot{token}/getMe") as resp:
+                    data = await resp.json(content_type=None)
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, *proxy_errors()) as exc:
+            return "offline", str(exc) or type(exc).__name__
+        if isinstance(data, dict) and data.get("ok"):
+            result = data.get("result") or {}
+            return "ok", result.get("username") or str(result.get("id"))
+        if resp.status >= 500:
+            return "offline", f"Telegram ответил {resp.status}"
+        description = data.get("description") if isinstance(data, dict) else None
+        return "invalid", f"Telegram не принял токен ({description or resp.status})"
 
     return asyncio.run(get_me())
 

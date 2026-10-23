@@ -225,3 +225,41 @@ def test_reconfigure_can_drop_crypto(tmp_path):
     wizard(tmp_path, ["555", "12345:crypto", "", "111:AAA", "", "", "100", "", "", "", "", "н"])[0].run()
     wizard(tmp_path, ["д", "", "-", "", "", "", "100", "", "", "", "н"])[0].run()
     assert not load_config(tmp_path / "config.yaml").bots[0].crypto.enabled
+
+
+def test_check_bot_token_without_aiogram(unused_tcp_port):
+    """Проверка токена — обычным HTTP-запросом (на слабом сервере aiogram грузится слишком долго)."""
+    import threading
+
+    from aiohttp import web
+
+    port = unused_tcp_port
+
+    async def get_me(request):
+        token = request.match_info["token"]
+        if token == "123456:" + "A" * 35:
+            return web.json_response({"ok": True, "result": {"id": 123456, "username": "good_bot"}})
+        return web.json_response({"ok": False, "error_code": 401, "description": "Unauthorized"}, status=401)
+
+    app = web.Application()
+    app.router.add_get("/bot{token}/getMe", get_me)
+    runner = web.AppRunner(app)
+    ready = threading.Event()
+
+    def serve():
+        import asyncio as aio
+
+        loop = aio.new_event_loop()
+        loop.run_until_complete(runner.setup())
+        loop.run_until_complete(web.TCPSite(runner, "127.0.0.1", port).start())
+        ready.set()
+        loop.run_forever()
+
+    threading.Thread(target=serve, daemon=True).start()
+    ready.wait(5)
+    api = f"http://127.0.0.1:{port}"
+    assert setup_wizard.check_bot_token("123456:" + "A" * 35, api=api) == ("ok", "good_bot")
+    status, reason = setup_wizard.check_bot_token("123456:" + "B" * 35, api=api)
+    assert status == "invalid" and "Unauthorized" in reason
+    assert setup_wizard.check_bot_token("плохой", api=api)[0] == "invalid"
+    assert setup_wizard.check_bot_token("123456:" + "A" * 35, api="http://127.0.0.1:1")[0] == "offline"
