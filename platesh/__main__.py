@@ -84,10 +84,12 @@ async def check(cfg: Config) -> bool:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="platesh", description="Платёжный шлюз Stars + CryptoBot для Telegram-ботов")
-    parser.add_argument("command", nargs="?", default="run", choices=["run", "check", "setup", "update", "genkey"],
+    parser.add_argument("command", nargs="?", default="run", choices=["run", "check", "setup", "update", "service", "genkey"],
                         help="run — запустить, setup — настроить (вопросы в терминале), check — проверить настройки, "
-                             "update — скачать новую версию, genkey — придумать ключ API")
+                             "update — скачать новую версию, service — работать постоянно на Linux-сервере, "
+                             "genkey — придумать ключ API")
     parser.add_argument("-c", "--config", default="config.yaml", help="путь к config.yaml")
+    parser.add_argument("--no-start", action="store_true", help="setup: только настроить, не запускать")
     args = parser.parse_args(argv)
 
     if args.command == "genkey":
@@ -106,12 +108,22 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     config_path = Path(args.config).expanduser().resolve()
+
+    if args.command == "service":
+        from .service import ServiceError, install_service
+
+        try:
+            install_service(Path(__file__).resolve().parent.parent, config_path)
+        except ServiceError as exc:
+            print(f"Ошибка: {exc}", file=sys.stderr)
+            sys.exit(1)
+        return
     # Нет настроек и человек сидит у терминала — сразу запускаем мастер, а не ругаемся.
     first_run = args.command == "run" and not config_path.exists() and sys.stdin.isatty()
     if args.command == "setup" or first_run:
         from .setup_wizard import Wizard
 
-        if not Wizard(config_path).run():
+        if not Wizard(config_path).run(offer_start=not args.no_start):
             return
         args.command = "run"
 

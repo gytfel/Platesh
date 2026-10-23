@@ -450,15 +450,18 @@ class Wizard:
 
     # ------------------------------------------------------------------ сценарий
 
-    def run(self) -> bool:
-        """Возвращает True, если пользователь хочет сразу запустить Platesh."""
+    def run(self, *, offer_start: bool = True) -> bool:
+        """Возвращает True, если пользователь хочет сразу запустить Platesh.
+
+        offer_start=False — не спрашивать про запуск (установка на сервер сама включит службу).
+        """
         self.say("=========== Настройка Platesh ===========")
         self.say("Отвечай на вопросы. Enter — значение в [скобках]. Прервать — Ctrl+C.")
         try:
             name = self.config_path.name
             if self.config_path.exists():
                 if not self.ask_yes(f"\n{name} уже есть. Настроить заново? (старый сохранится как {name}.bak)", False):
-                    return self.ask_yes("Запустить Platesh с текущими настройками?")
+                    return offer_start and self.ask_yes("Запустить Platesh с текущими настройками?")
                 self.previous = self.load_previous()
                 self.proxy = self.previous.get("proxy")
                 if self.previous:
@@ -484,7 +487,7 @@ class Wizard:
             self.write_files(self.build_config(admin_id, port, crypto, bots), crypto[0], bots)
             self.say(f"\n✅ Настройки сохранены в {self.config_path.name} и .env")
             self.explain(bots, admin_id, port)
-            return self.ask_yes("\nЗапустить Platesh сейчас?")
+            return offer_start and self.ask_yes("\nЗапустить Platesh сейчас?")
         except Aborted:
             self.say("\nНастройка прервана.")
             return False
