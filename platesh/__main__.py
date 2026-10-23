@@ -8,19 +8,25 @@ import logging
 import secrets
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from aiogram.exceptions import TelegramAPIError
-from aiogram.utils.token import TokenValidationError
-
-from .access import diagnose
-from .bots.registry import BotRuntime, create_bot
-from .config import CRYPTO, MIN_KEY_LENGTH, STARS, Config, ConfigError, load_config, weak_keys
-from .cryptopay import CryptoPayClient, CryptoPayError
-from .net import mask_proxy
+# Остальная программа импортируется внутри функций: команда update должна работать,
+# даже если какой-то файл программы сломан или не хватает библиотеки.
+if TYPE_CHECKING:
+    from .config import Config
 
 
 async def check(cfg: Config) -> bool:
     """Проверяет токены ботов и CryptoBot, печатает сводку."""
+    from aiogram.exceptions import TelegramAPIError
+    from aiogram.utils.token import TokenValidationError
+
+    from .access import diagnose
+    from .bots.registry import BotRuntime, create_bot
+    from .config import CRYPTO, MIN_KEY_LENGTH, STARS, weak_keys
+    from .cryptopay import CryptoPayClient, CryptoPayError
+    from .net import mask_proxy
+
     good = True
     crypto_checked: dict[tuple[str, bool], str] = {}
     proxy = cfg.proxy_url
@@ -108,6 +114,8 @@ def main(argv: list[str] | None = None) -> None:
         if not Wizard(config_path).run():
             return
         args.command = "run"
+
+    from .config import ConfigError, load_config
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
     try:
