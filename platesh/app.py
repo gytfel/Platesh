@@ -113,6 +113,16 @@ async def run(cfg: Config) -> None:
             except TelegramAPIError as exc:
                 log.warning("Бот «%s»: не удалось подготовить бота: %s", rt.name, exc)
 
+        for rt in managed:
+            log.info("Бот @%s: витрина Platesh — напиши ему /start, чтобы увидеть товары и оплату", rt.username)
+        running = {p.name for p in processes}
+        for rt in registry.all():
+            if not rt.cfg.managed and rt.name not in running:
+                log.warning(
+                    "Бот @%s (mode: external) сам не отвечает: оплата появится, когда запустится твой код бота "
+                    "с platesh.router() и install_paywall(). Нет своего кода — поставь mode: managed "
+                    "(или .\\run.bat setup → «У бота есть свой код?» — «н»)", rt.username,
+                )
         log.info(
             "Platesh запущен: %s бот(ов), из них под управлением — %s, своим кодом — %s. Остановить: Ctrl+C",
             len(registry.all()), len(managed), len(processes),

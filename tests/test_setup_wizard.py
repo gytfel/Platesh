@@ -69,10 +69,10 @@ def test_paywall_and_shop_bots(tmp_path):
         "123456789",                    # мой ID
         "12345:crypto", "",             # CryptoBot, валюта по умолчанию USD
         "bad", "111:AAA",               # неверный токен → переспросил
-        "", "", "150", "2,5", "",       # пейволл, название, цены, срок 30 по умолчанию
+        "д", "", "150", "2,5", "",      # свой код есть (пейволл), название, цены, срок 30
         f'"{bot_dir / "bot.py"}"', "",  # путь (с кавычками, как копирует Windows), команда по умолчанию
         "д",                            # ещё бот
-        "222:BBB", "2", "Гайд",
+        "222:BBB", "н", "Гайд",         # своего кода нет → магазин
         "", "", "50", "",               # без цен → переспросил, потом 50 Stars
         "0", "",                        # навсегда, текст по умолчанию
         "",                             # больше ботов не надо
@@ -108,7 +108,7 @@ def test_minimal_stars_only_and_manual_start(tmp_path):
         "42", "",                       # ID, без крипты
         "333:offline", "",              # Telegram недоступен; Enter — проверить ещё раз
         "-",                            # всё ещё нет — сохранить без проверки
-        "1", "Премиум", "100", "7",
+        "д", "Премиум", "100", "7",
         "",                             # бота запускаю сам
         "н", "д",                       # больше ботов нет, запустить сейчас
     ])
@@ -191,3 +191,17 @@ def test_blocked_telegram_proxy_is_offered_and_saved(tmp_path, monkeypatch):
     cfg = load_config(tmp_path / "config.yaml")
     assert cfg.proxy == "socks5://127.0.0.1:10808"
     assert cfg.bots[0].name == "proxied_bot"
+
+
+def test_bot_without_code_becomes_shop_by_default(tmp_path):
+    w, term = wizard(tmp_path, ["7", "", "111:AAA", "", "VIP", "300", "30", "", "", "н"])
+    w.run()
+    [bot] = load_config(tmp_path / "config.yaml").bots
+    assert bot.managed and bot.products["premium"].price_stars == 300
+    assert "Магазин: Platesh ведёт бота сам" in term.text
+
+
+def test_paywall_without_code_path_warns(tmp_path):
+    w, term = wizard(tmp_path, ["7", "", "111:AAA", "д", "", "100", "", "", "н", "н"])
+    w.run()
+    assert "бот не будет отвечать" in term.text

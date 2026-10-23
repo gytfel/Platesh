@@ -277,10 +277,10 @@ class Wizard:
             name = f"{name[:29]}_{index}"
         used_names.add(name)
 
-        self.say("Как подключить этого бота?\n"
-                 "  1 — пейволл: у бота свой код, без оплаты он не отвечает\n"
-                 "  2 — магазин: Platesh сам ведёт бота (каталог, оплата, выдача)")
-        mode = "managed" if self.ask("Выбор", "1") == "2" else "external"
+        self.say("Есть ли у этого бота свой код — программа на Python (aiogram 3), которую ты запускаешь?\n"
+                 "  нет — Platesh сам ведёт бота: показывает товар, принимает оплату, выдаёт покупку\n"
+                 "  да  — оплата встраивается в твой код (пейволл: без оплаты бот не отвечает)")
+        mode = "external" if self.ask_yes("У бота есть свой код?", False) else "managed"
 
         title = self.ask("Название платного доступа" if mode == "external" else "Название товара",
                          "Доступ к боту" if mode == "external" else "Товар")[:64]
@@ -303,6 +303,7 @@ class Wizard:
         while True:
             raw = self.ask("Путь к .py-файлу бота (Enter — буду запускать бота сам)").strip('"\'')
             if not raw:
+                self.say("  ⚠️ Пока твой код не запущен, бот не будет отвечать: Platesh сам в нём не отвечает.")
                 return setup
             script = Path(raw).expanduser()
             if not script.is_absolute():
