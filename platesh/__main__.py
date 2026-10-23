@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import secrets
 import sys
 from pathlib import Path
@@ -82,11 +83,33 @@ async def check(cfg: Config) -> bool:
     return good
 
 
+def bot_env_lines(cfg: Config, token: str) -> str:
+    """Строки для .env бота со своим кодом (mode: external), который запускается отдельно от Platesh."""
+    token = token.strip()
+    setup = "./run.sh setup --no-start && systemctl restart platesh"
+    bot = next((b for b in cfg.bots if b.token == token), None) if token else None
+    if bot is None:
+        raise LookupError(f"этого бота нет в Platesh — добавь его ({setup}) с тем же токеном")
+    if bot.managed:
+        raise LookupError(
+            f"в Platesh бот «{bot.name}» настроен как магазин: тогда Platesh сам ведёт бота и мешает его коду. "
+            f"Перенастрой ({setup}) и на вопрос «У бота есть свой код?» ответь «д»"
+        )
+    if not bot.api_key:
+        raise LookupError(f"у бота «{bot.name}» нет api_key — перенастрой его ({setup})")
+    host = cfg.server.host if cfg.server.host not in ("0.0.0.0", "::", "") else "127.0.0.1"
+    lines = [f"PLATESH_URL=http://{host}:{cfg.server.port}", f"PLATESH_KEY={bot.api_key}", f"PLATESH_BOT={bot.name}"]
+    if bot.admins:
+        lines.append("PLATESH_ADMINS=" + ",".join(str(a) for a in bot.admins))
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="platesh", description="Платёжный шлюз Stars + CryptoBot для Telegram-ботов")
-    parser.add_argument("command", nargs="?", default="run", choices=["run", "check", "setup", "update", "service", "genkey"],
+    parser.add_argument("command", nargs="?", default="run", choices=["run", "check", "setup", "update", "service", "bot-env", "genkey"],
                         help="run — запустить, setup — настроить (вопросы в терминале), check — проверить настройки, "
                              "update — скачать новую версию, service — работать постоянно на Linux-сервере, "
+                             "bot-env — строки PLATESH_* для .env бота со своим кодом (токен — в PLATESH_BOT_TOKEN), "
                              "genkey — придумать ключ API")
     parser.add_argument("-c", "--config", default="config.yaml", help="путь к config.yaml")
     parser.add_argument("--no-start", action="store_true", help="setup: только настроить, не запускать")
@@ -128,6 +151,14 @@ def main(argv: list[str] | None = None) -> None:
         args.command = "run"
 
     from .config import ConfigError, load_config
+
+    if args.command == "bot-env":
+        try:
+            print(bot_env_lines(load_config(args.config), os.environ.get("PLATESH_BOT_TOKEN", "")))
+        except (ConfigError, LookupError) as exc:
+            print(exc, file=sys.stderr)
+            sys.exit(1)
+        return
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
     try:

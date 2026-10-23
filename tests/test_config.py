@@ -149,3 +149,20 @@ def test_run_command(tmp_path):
     raw["bots"][0]["run"] = "python bot.py"  # managed-бота Platesh ведёт сам
     with pytest.raises(ConfigError, match="mode: external"):
         parse_config(raw, tmp_path)
+
+
+def test_bot_env_lines(tmp_path):
+    from platesh.__main__ import bot_env_lines
+
+    raw = make_raw_config(tmp_path)
+    raw["bots"][1]["api_key"] = "ext-key"
+    cfg = parse_config(raw, tmp_path)
+    lines = bot_env_lines(cfg, raw["bots"][1]["token"] + "\n").splitlines()
+    assert lines == ["PLATESH_URL=http://127.0.0.1:8080", "PLATESH_KEY=ext-key", "PLATESH_BOT=ext", "PLATESH_ADMINS=1000"]
+    with pytest.raises(LookupError, match="магазин"):
+        bot_env_lines(cfg, raw["bots"][0]["token"])  # managed-бот ведёт сам Platesh
+    with pytest.raises(LookupError, match="нет в Platesh"):
+        bot_env_lines(cfg, "999:unknown")
+    raw["bots"][1]["api_key"] = None
+    with pytest.raises(LookupError, match="api_key"):
+        bot_env_lines(parse_config(raw, tmp_path), raw["bots"][1]["token"])
