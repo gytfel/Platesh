@@ -72,14 +72,21 @@ class PlateshClient:
     @classmethod
     def from_env(cls, **kwargs: Any) -> PlateshClient:
         """Настройки из переменных, которые Platesh передаёт боту при запуске (run: в config.yaml)."""
-        url, key, bot = os.environ.get("PLATESH_URL"), os.environ.get("PLATESH_KEY"), os.environ.get("PLATESH_BOT")
-        if not (url and key and bot):
+        values = {name: (os.environ.get(name) or "").strip() for name in ("PLATESH_URL", "PLATESH_KEY", "PLATESH_BOT")}
+        missing = [name for name, value in values.items() if not value]
+        if missing:
             raise PlateshError(
-                "Не заданы PLATESH_URL, PLATESH_KEY и PLATESH_BOT. Запускай бота через Platesh "
-                "(run: в config.yaml) или создай клиент явно: PlateshClient(url, api_key=..., bot=...)"
+                f"Не заданы {', '.join(missing)}. Запускай бота через Platesh (run: в config.yaml), "
+                "впиши их в .env бота или создай клиент явно: PlateshClient(url, api_key=..., bot=...)"
             )
-        admins = [int(a) for a in os.environ.get("PLATESH_ADMINS", "").split(",") if a.strip()]
-        return cls(url, key, bot, admins=admins, **kwargs)
+        admins = []
+        for item in os.environ.get("PLATESH_ADMINS", "").replace(" ", "").split(","):
+            if not item:
+                continue
+            if not item.lstrip("-").isdigit():
+                raise PlateshError(f"PLATESH_ADMINS: «{item}» — не Telegram ID. Нужны числа через запятую")
+            admins.append(int(item))
+        return cls(values["PLATESH_URL"], values["PLATESH_KEY"], values["PLATESH_BOT"], admins=admins, **kwargs)
 
     async def close(self) -> None:
         if self._session is not None and not self._session.closed:

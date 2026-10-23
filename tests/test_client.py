@@ -334,3 +334,16 @@ async def test_business_admin_is_exempt(paid_env):
     dp, seen = business_dispatcher(client)
     await dp.feed_update(own_bot, business_message("админ", connection="bc3"))
     assert seen == [("message", "админ")]
+
+
+def test_from_env_reports_bad_settings(monkeypatch):
+    monkeypatch.setenv("PLATESH_URL", "http://127.0.0.1:8080")
+    monkeypatch.setenv("PLATESH_KEY", "")
+    monkeypatch.setenv("PLATESH_BOT", "")
+    with pytest.raises(PlateshError, match="PLATESH_KEY, PLATESH_BOT"):
+        PlateshClient.from_env()
+    monkeypatch.setenv("PLATESH_KEY", "k")
+    monkeypatch.setenv("PLATESH_BOT", "b")
+    monkeypatch.setenv("PLATESH_ADMINS", "ТВОЙ_ID")
+    with pytest.raises(PlateshError, match="не Telegram ID"):
+        PlateshClient.from_env()
