@@ -352,3 +352,23 @@ async def test_short_subscription_reminds_within_third_of_term(tmp_path):
         assert len(env.session().calls(SendMessage)) == 1
     finally:
         await env.db.close()
+
+
+async def test_admin_gets_chat_id_when_bot_added_to_channel(senv, dp):
+    from aiogram.types import ChatMemberAdministrator
+
+    bot_user = User(id=senv.shop.id, is_bot=True, first_name="bot")
+    admin = ChatMemberAdministrator(
+        user=bot_user, is_anonymous=False, can_be_edited=False, can_manage_chat=True, can_delete_messages=True,
+        can_manage_video_chats=True, can_restrict_members=True, can_promote_members=False, can_change_info=True,
+        can_invite_users=True, can_post_stories=False, can_edit_stories=False, can_delete_stories=False,
+        can_send_welcome_messages=False,
+    )
+    update = Update(update_id=next(_ids), my_chat_member=ChatMemberUpdated(
+        chat=Chat(id=-1009876543210, type="channel", title="Мой канал"),
+        from_user=User(id=ADMIN_ID, is_bot=False, first_name="a"), date=datetime.datetime.now(),
+        old_chat_member=ChatMemberLeft(user=bot_user), new_chat_member=admin,
+    ))
+    await feed(senv, dp, update)
+    text = texts_to(senv.session(), ADMIN_ID)[-1]
+    assert "-1009876543210" in text and "Мой канал" in text and "администратором" in text

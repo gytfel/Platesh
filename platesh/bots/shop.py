@@ -226,6 +226,22 @@ def create_shop_router() -> Router:
         log.info("Бот «%s»: заявка %s в чат %s отклонена — нет оплаты", rt.name, request.from_user.id, chat_id)
         await offer_access(rt, request.user_chat_id, chat_id, request.chat.title)
 
+    @router.my_chat_member()
+    async def bot_added_to_chat(event: ChatMemberUpdated, rt: BotRuntime, payments: PaymentService) -> None:
+        """Подсказка при настройке: бота добавили в канал/группу — присылаем админам ID для config.yaml."""
+        status = event.new_chat_member.status
+        if event.chat.type == "private" or status not in ("administrator", "member"):
+            return
+        if event.old_chat_member.status == status:
+            return
+        role = "администратором" if status == "administrator" else "участником (нужно сделать администратором!)"
+        title = html.escape(event.chat.title or str(event.chat.id))
+        await payments.notifier.alert(
+            rt,
+            f"ℹ️ Бот добавлен в «{title}» {role}.\n"
+            f"ID для config.yaml (deliver.invite_chat_id): <code>{event.chat.id}</code>",
+        )
+
     @router.chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
     async def member_joined(event: ChatMemberUpdated, rt: BotRuntime, payments: PaymentService) -> None:
         """Охрана: кто попал в закрытый чат в обход оплаты (старая или публичная ссылка), удаляется."""
