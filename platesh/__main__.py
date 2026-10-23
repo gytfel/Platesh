@@ -7,6 +7,7 @@ import asyncio
 import logging
 import secrets
 import sys
+from pathlib import Path
 
 from aiogram.exceptions import TelegramAPIError
 from aiogram.utils.token import TokenValidationError
@@ -74,14 +75,25 @@ async def check(cfg: Config) -> bool:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="platesh", description="Платёжный шлюз Stars + CryptoBot для Telegram-ботов")
-    parser.add_argument("command", nargs="?", default="run", choices=["run", "check", "genkey"],
-                        help="run — запустить, check — проверить настройки, genkey — придумать ключ API")
+    parser.add_argument("command", nargs="?", default="run", choices=["run", "check", "setup", "genkey"],
+                        help="run — запустить, setup — настроить (вопросы в терминале), "
+                             "check — проверить настройки, genkey — придумать ключ API")
     parser.add_argument("-c", "--config", default="config.yaml", help="путь к config.yaml")
     args = parser.parse_args(argv)
 
     if args.command == "genkey":
         print(secrets.token_urlsafe(32))
         return
+
+    config_path = Path(args.config).expanduser().resolve()
+    # Нет настроек и человек сидит у терминала — сразу запускаем мастер, а не ругаемся.
+    first_run = args.command == "run" and not config_path.exists() and sys.stdin.isatty()
+    if args.command == "setup" or first_run:
+        from .setup_wizard import Wizard
+
+        if not Wizard(config_path).run():
+            return
+        args.command = "run"
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
     try:

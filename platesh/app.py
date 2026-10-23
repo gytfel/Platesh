@@ -19,6 +19,7 @@ from .config import Config, weak_keys
 from .db import Database
 from .notifier import Notifier
 from .payments import PaymentService
+from .supervisor import BotProcess, start_bot_processes
 from .web import create_app
 
 log = logging.getLogger("platesh")
@@ -81,6 +82,7 @@ async def run(cfg: Config) -> None:
 
     runner: web.AppRunner | None = None
     tasks: list[asyncio.Task[None]] = []
+    processes: list[BotProcess] = []
     try:
         if cfg.server.enabled:
             runner = web.AppRunner(create_app(cfg, registry, payments), access_log=None)
@@ -96,6 +98,8 @@ async def run(cfg: Config) -> None:
             tasks.append(asyncio.create_task(crypto_poller(payments, cfg.crypto_poll_interval)))
         tasks.append(asyncio.create_task(access_watcher(payments)))
         await check_chats(registry, payments, notifier)
+        # Код external-ботов (run: в config.yaml) — после HTTP API, чтобы им было к чему подключаться.
+        processes = start_bot_processes(cfg, registry.all())
 
         managed = registry.managed()
         for rt in managed:
@@ -106,8 +110,8 @@ async def run(cfg: Config) -> None:
                 log.warning("Бот «%s»: не удалось подготовить бота: %s", rt.name, exc)
 
         log.info(
-            "Platesh запущен: %s бот(ов), из них под управлением — %s. Остановить: Ctrl+C",
-            len(registry.all()), len(managed),
+            "Platesh запущен: %s бот(ов), из них под управлением — %s, своим кодом — %s. Остановить: Ctrl+C",
+            len(registry.all()), len(managed), len(processes),
         )
         if managed:
             await dp.start_polling(*(rt.bot for rt in managed), close_bot_session=False)
@@ -115,6 +119,7 @@ async def run(cfg: Config) -> None:
             await _wait_for_stop_signal()
     finally:
         log.info("Останавливаюсь...")
+        await asyncio.gather(*(p.stop() for p in processes))
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)

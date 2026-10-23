@@ -215,3 +215,32 @@ async def test_example_paywall_bot(paid_env):
     client.forget(BUYER_ID)
     await dp.feed_update(own_bot, text_update("эхо"))
     assert answers()[-1] == "Ты написал: эхо"
+
+
+def test_from_env(monkeypatch):
+    for name in ("PLATESH_URL", "PLATESH_KEY", "PLATESH_BOT", "PLATESH_ADMINS"):
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(PlateshError, match="PLATESH_URL"):
+        PlateshClient.from_env()
+    monkeypatch.setenv("PLATESH_URL", "http://127.0.0.1:9000")
+    monkeypatch.setenv("PLATESH_KEY", "k")
+    monkeypatch.setenv("PLATESH_BOT", "bot1")
+    monkeypatch.setenv("PLATESH_ADMINS", "1, 2")
+    client = PlateshClient.from_env()
+    assert client.base_url == "http://127.0.0.1:9000" and client.bot == "bot1" and client.admins == {1, 2}
+
+
+async def test_admins_from_platesh_pass_paywall(paid_env):
+    env, client, own_bot, dp, handled = paid_env
+    client.admins = {BUYER_ID}  # как будто пришло из PLATESH_ADMINS
+    dp2 = Dispatcher()
+    dp2.include_router(client.router())
+    client.install_paywall(dp2)
+    seen = []
+
+    @dp2.message()
+    async def logic(message: Message) -> None:
+        seen.append(message.text)
+
+    await dp2.feed_update(own_bot, text_update("я админ"))
+    assert seen == ["я админ"]

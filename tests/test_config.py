@@ -128,3 +128,24 @@ def test_days_must_be_positive(tmp_path):
     raw["bots"][0]["products"][0]["days"] = 0
     with pytest.raises(ConfigError, match="days"):
         parse_config(raw, tmp_path)
+
+
+def test_run_command(tmp_path):
+    bot_dir = tmp_path / "bot"
+    bot_dir.mkdir()
+    raw = make_raw_config(tmp_path)
+    raw["bots"][1]["run"] = "python3 main.py --flag"
+    cfg = parse_config(raw, tmp_path)
+    assert cfg.bots[1].run.command == ("python3", "main.py", "--flag") and cfg.bots[1].run.cwd == tmp_path
+
+    raw["bots"][1]["run"] = {"command": ["python", "bot.py"], "cwd": "bot"}
+    assert parse_config(raw, tmp_path).bots[1].run.cwd == bot_dir
+
+    raw["bots"][1]["run"] = {"command": "python bot.py", "cwd": "missing"}
+    with pytest.raises(ConfigError, match="папка не найдена"):
+        parse_config(raw, tmp_path)
+
+    raw["bots"][1].pop("run")
+    raw["bots"][0]["run"] = "python bot.py"  # managed-бота Platesh ведёт сам
+    with pytest.raises(ConfigError, match="mode: external"):
+        parse_config(raw, tmp_path)

@@ -45,39 +45,38 @@
 - **Telegram Stars** работает без дополнительных токенов.
 - **Твой Telegram ID** (для уведомлений) можно узнать у [@userinfobot](https://t.me/userinfobot).
 
-### 2. Установи и настрой
+### 2. Скачай и запусти
 
-Нужен Python 3.10 или новее.
+Нужен Python 3.10 или новее (на Windows при установке отметь «Add Python to PATH»).
 
 ```bash
-git clone <этот репозиторий> platesh && cd platesh
-cp config.example.yaml config.yaml
-cp .env.example .env
+git clone -b claude/beautiful-johnson-i6jquz https://github.com/gytfel/Platesh.git
+cd Platesh
+./run.sh          # Windows: run.bat
 ```
 
-Впиши токены в `.env`, свой ID в `admins` и товары в `config.yaml` (подробнее — в разделе «Настройка»).
+При первом запуске Platesh установит зависимости и **задаст вопросы прямо в терминале**: твой Telegram ID, токен CryptoBot, токены ботов, цену и срок доступа, где лежит код бота. Токены он сразу проверит, ключи придумает сам, сохранит всё в `config.yaml` и `.env` и покажет, какие строки добавить в код каждого бота. Потом предложит запуститься.
 
-### 3. Запусти
+Если указать путь к файлу бота, **Platesh сам запускает твоих ботов**: всё работает в одном терминале, вывод ботов отмечен `[имя бота]`, упавший бот перезапускается, а Ctrl+C останавливает всё вместе.
 
-**Linux / macOS:**
-```bash
-./run.sh          # первый раз: установит зависимости и создаст config.yaml и .env
-./run.sh genkey   # придумает надёжный ключ API для .env
-./run.sh check    # проверит токены ботов, CryptoBot и настройки каналов
-./run.sh          # запуск (остановить — Ctrl+C)
-```
+| Команда | Что делает |
+|---|---|
+| `./run.sh` | Запуск (первый раз — с настройкой) |
+| `./run.sh setup` | Настроить заново (старые файлы сохранятся как `.bak`) |
+| `./run.sh check` | Проверить токены, CryptoBot и закрытые каналы |
+| `./run.sh genkey` | Придумать надёжный ключ API |
 
-**Windows:** те же команды через `run.bat`: `run.bat`, `run.bat genkey`, `run.bat check` (или двойной клик по `run.bat`).
+На Windows всё то же через `run.bat`: `run.bat setup`, `run.bat check`.
 
-**Вручную:**
+**Вручную, без скриптов:**
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
-python -m platesh check
-python -m platesh            # или: python -m platesh -c путь/к/config.yaml
+python -m platesh setup      # или: cp config.example.yaml config.yaml и заполнить
+python -m platesh
 ```
 
-**Docker:**
+**Docker** (настройки нужно подготовить заранее: `./run.sh setup` или вручную; ботов со своим кодом в Docker запускай отдельно — `run:` там не сработает, в контейнере нет их кода):
 ```bash
 docker compose up -d --build
 docker compose logs -f
@@ -136,6 +135,7 @@ bots:
 | `texts` | Любые тексты интерфейса, ключи — в [`platesh/texts.py`](platesh/texts.py) |
 | `guard` | Охрана закрытых каналов (по умолчанию `true`), см. «Защита доступа» |
 | `api_key` | Отдельный ключ API только для этого бота |
+| `run` | Для `external`: как запускать код бота, например `{command: "python bot.py", cwd: "C:/bots/mybot"}`. Platesh запустит его вместе с собой и передаст `PLATESH_URL`, `PLATESH_KEY`, `PLATESH_BOT`, `PLATESH_ADMINS` для `PlateshClient.from_env()` |
 | `products` | Товары: `id`, `title`, `description`, `price.stars`, `price.crypto`, `days`, `deliver` |
 
 `days` у товара включает подписку: доступ действует N дней. Повторная оплата продлевает доступ от даты окончания, а не от сегодняшнего дня, так что оставшиеся дни не сгорают. Без `days` доступ бессрочный.
@@ -192,7 +192,10 @@ Platesh не запускает такого бота, поэтому конфл
 ```python
 from platesh_client import PlateshClient
 
-platesh = PlateshClient("http://127.0.0.1:8080", api_key="ключ этого бота", bot="my_own_bot")
+# Если бота запускает Platesh (run: в config.yaml) — адрес, ключ и админы придут сами:
+platesh = PlateshClient.from_env()
+# Если запускаешь бота отдельно — укажи их явно:
+# platesh = PlateshClient("http://127.0.0.1:8080", api_key="ключ этого бота", bot="my_own_bot", admins=[ТВОЙ_ID])
 
 # Обязательно, раньше своих роутеров: подтверждение оплат Stars, кнопки «Оплатить»/«Продлить»
 # и охрана закрытых каналов. Счета, созданные не через Platesh, роутер не трогает.

@@ -4,10 +4,8 @@
 (⭐ Stars / 💎 CryptoBot). После оплаты бот работает как обычно, а когда подписка
 закончится — снова закроется.
 
-Запуск (Platesh уже запущен в другом терминале, в config.yaml есть бот my_own_bot):
-
-    Linux/macOS:  BOT_TOKEN=... PLATESH_KEY=... ADMINS=123456789 python examples/paywall_bot.py
-    Windows:      set BOT_TOKEN=...  &  set PLATESH_KEY=...  &  python examples\\paywall_bot.py
+Удобнее всего, чтобы бота запускал сам Platesh (мастер `./run.sh setup` спросит путь к файлу бота):
+тогда адрес, ключ и админы придут в переменных окружения и PlateshClient.from_env() их подхватит.
 
 В своём боте нужны только строки, помеченные ★.
 """
@@ -55,15 +53,10 @@ def build_dispatcher(platesh: PlateshClient, admins: list[int]) -> Dispatcher:
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
-    bot = Bot(os.environ["BOT_TOKEN"])
-    platesh = PlateshClient(  # ★
-        os.environ.get("PLATESH_URL", "http://127.0.0.1:8080"),
-        api_key=os.environ["PLATESH_KEY"],  # ключ этого бота (bots[].api_key в config.yaml)
-        bot=os.environ.get("PLATESH_BOT", "my_own_bot"),  # name бота в config.yaml
-    )
-    admins = [int(x) for x in os.environ.get("ADMINS", "").replace(",", " ").split()]
+    bot = Bot(os.environ["BOT_TOKEN"])  # токен твоего бота — как у тебя и было
+    platesh = PlateshClient.from_env()  # ★ адрес, ключ и админы — от Platesh
     try:
-        await build_dispatcher(platesh, admins).start_polling(bot)
+        await build_dispatcher(platesh, admins=[]).start_polling(bot)
     finally:
         await platesh.close()
 

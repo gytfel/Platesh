@@ -4,7 +4,10 @@
 
     from platesh_client import PlateshClient
 
-    platesh = PlateshClient("http://127.0.0.1:8080", api_key="ключ этого бота", bot="my_own_bot")
+    # Если бота запускает Platesh (run: в config.yaml) — адрес, ключ и админы придут сами:
+    platesh = PlateshClient.from_env()
+    # Если запускаешь бота сам — укажи их явно:
+    # platesh = PlateshClient("http://127.0.0.1:8080", api_key="ключ этого бота", bot="my_own_bot")
 
     # 1) Обязательно: подтверждение оплат Stars, кнопки «Оплатить/Продлить», охрана закрытых каналов.
     dp.include_router(platesh.router())
@@ -28,6 +31,7 @@ import asyncio
 import hashlib
 import hmac
 import logging
+import os
 import time
 from contextlib import suppress
 from typing import Any, Awaitable, Callable, Iterable
@@ -50,14 +54,27 @@ class PlateshError(Exception):
 
 
 class PlateshClient:
-    def __init__(self, base_url: str, api_key: str, bot: str, *, timeout: float = 15) -> None:
+    def __init__(self, base_url: str, api_key: str, bot: str, *, admins: Iterable[int] = (), timeout: float = 15) -> None:
         self.base_url = base_url.rstrip("/")
         self.bot = bot
+        self.admins = {int(a) for a in admins}  # им пейволл не мешает
         self._headers = {"Authorization": f"Bearer {api_key}"}
         self._timeout = aiohttp.ClientTimeout(total=timeout)
         self._session: aiohttp.ClientSession | None = None
         self._access_cache: dict[tuple[int, str | None, int | None], tuple[bool, float]] = {}
         self._bot_info: dict[str, Any] | None = None
+
+    @classmethod
+    def from_env(cls, **kwargs: Any) -> PlateshClient:
+        """Настройки из переменных, которые Platesh передаёт боту при запуске (run: в config.yaml)."""
+        url, key, bot = os.environ.get("PLATESH_URL"), os.environ.get("PLATESH_KEY"), os.environ.get("PLATESH_BOT")
+        if not (url and key and bot):
+            raise PlateshError(
+                "Не заданы PLATESH_URL, PLATESH_KEY и PLATESH_BOT. Запускай бота через Platesh "
+                "(run: в config.yaml) или создай клиент явно: PlateshClient(url, api_key=..., bot=...)"
+            )
+        admins = [int(a) for a in os.environ.get("PLATESH_ADMINS", "").split(",") if a.strip()]
+        return cls(url, key, bot, admins=admins, **kwargs)
 
     async def close(self) -> None:
         if self._session is not None and not self._session.closed:
@@ -307,7 +324,7 @@ class PlateshClient:
         client = self
         products = list(products) if products else None
         allowed = {f"/{c.lstrip('/')}" for c in allow_commands}
-        exempt = set(exempt_users)
+        exempt = set(exempt_users) | self.admins
 
         class Paywall(BaseMiddleware):
             async def __call__(self, handler: Callable[..., Awaitable[Any]], event: Any, data: dict[str, Any]) -> Any:

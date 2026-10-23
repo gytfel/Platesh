@@ -97,6 +97,9 @@ bots:
     token: ${MY_OWN_BOT_TOKEN:-}
     mode: external
     api_key: ${MY_OWN_BOT_API_KEY:-}   # ключ только для этого бота (без возвратов и чужих ботов)
+    # run:                             # Platesh сам запустит код бота и перезапустит при падении
+    #   command: python bot.py
+    #   cwd: C:/bots/my_own_bot
     payments: [stars, crypto]
     notify_url: https://example.com/payments/webhook
     products:

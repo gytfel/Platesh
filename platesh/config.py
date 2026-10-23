@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shlex
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -81,6 +82,14 @@ class Product:
         return self.delivery.invite_chat_id
 
 
+@dataclass(frozen=True)
+class RunConfig:
+    """Как запускать код external-бота: Platesh стартует его сам и перезапускает при падении."""
+
+    command: tuple[str, ...]
+    cwd: Path | None = None
+
+
 @dataclass
 class BotConfig:
     name: str
@@ -95,6 +104,7 @@ class BotConfig:
     terms: str | None = None
     guard: bool = True
     api_key: str | None = None
+    run: RunConfig | None = None
 
     @property
     def managed(self) -> bool:
@@ -345,6 +355,37 @@ def _product(data: Any, where: str, base_dir: Path) -> Product:
     )
 
 
+def split_command(command: str) -> tuple[str, ...]:
+    if os.name == "nt":
+        # В Windows кавычки — часть синтаксиса cmd, а обратный слэш — разделитель пути.
+        return tuple(part.strip('"') for part in shlex.split(command, posix=False))
+    return tuple(shlex.split(command))
+
+
+def _run(data: Any, where: str, base_dir: Path) -> RunConfig | None:
+    if data in (None, ""):
+        return None
+    if isinstance(data, (str, list)):
+        data = {"command": data}
+    data = _section(data, where)
+    command = data.get("command")
+    if isinstance(command, str):
+        parts = split_command(command)
+    elif isinstance(command, list):
+        parts = tuple(str(p) for p in command)
+    else:
+        raise ConfigError(f"{where}.command: укажи команду запуска, например «python bot.py»")
+    if not parts:
+        raise ConfigError(f"{where}.command: пустая команда")
+    cwd = _str(data, "cwd", where)
+    cwd_path = Path(cwd).expanduser() if cwd else base_dir
+    if not cwd_path.is_absolute():
+        cwd_path = base_dir / cwd_path
+    if not cwd_path.is_dir():
+        raise ConfigError(f"{where}.cwd: папка не найдена: {cwd_path}")
+    return RunConfig(command=parts, cwd=cwd_path)
+
+
 def _bot(data: Any, where: str, *, admins: tuple[int, ...], crypto: CryptoConfig, notify_url: str | None, base_dir: Path) -> BotConfig:
     data = _section(data, where)
     name = _str(data, "name", where, required=True)
@@ -398,6 +439,7 @@ def _bot(data: Any, where: str, *, admins: tuple[int, ...], crypto: CryptoConfig
         terms=_str(data, "terms", where),
         guard=_bool(data.get("guard", True), f"{where}.guard"),
         api_key=_str(data, "api_key", where),
+        run=_run(data.get("run"), f"{where}.run", base_dir),
     )
 
 
@@ -435,6 +477,8 @@ def parse_config(raw: Any, base_dir: Path) -> Config:
             raise ConfigError(f"bots: повторяется имя «{bot.name}»")
         if any(b.token == bot.token for b in bots):
             raise ConfigError(f"bots[{bot.name}]: этот токен уже используется другим ботом")
+        if bot.run is not None and bot.managed:
+            raise ConfigError(f"bots[{bot.name}].run: запуск своего кода нужен только ботам с mode: external")
         if bot.api_key and (bot.api_key == server.api_key or any(b.api_key == bot.api_key for b in bots)):
             raise ConfigError(f"bots[{bot.name}].api_key: у каждого бота должен быть свой ключ, отличный от server.api_key")
         bots.append(bot)
@@ -458,7 +502,10 @@ def parse_config(raw: Any, base_dir: Path) -> Config:
 def load_config(path: str | Path) -> Config:
     path = Path(path).expanduser().resolve()
     if not path.is_file():
-        raise ConfigError(f"Файл конфигурации не найден: {path}. Скопируй config.example.yaml в config.yaml")
+        raise ConfigError(
+            f"Файл конфигурации не найден: {path}. Настрой Platesh: ./run.sh setup (Windows: run.bat setup) "
+            f"или скопируй config.example.yaml в config.yaml"
+        )
     load_dotenv(path.parent / ".env")
     if Path.cwd() != path.parent:
         load_dotenv(Path.cwd() / ".env")

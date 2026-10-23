@@ -1,5 +1,7 @@
 @echo off
-rem Запуск на Windows: двойной клик или "run.bat check" для проверки настроек
+rem Запуск на Windows: двойной клик или run.bat в терминале. При первом запуске задаст вопросы и всё настроит.
+rem   run.bat setup  - настроить заново
+rem   run.bat check  - проверить настройки
 chcp 65001 >nul
 cd /d "%~dp0"
 if not exist .venv\.installed (
@@ -8,14 +10,6 @@ if not exist .venv\.installed (
   .venv\Scripts\pip install -q -r requirements.txt || goto :fail
   type nul > .venv\.installed
 )
-if not exist config.yaml (
-  copy config.example.yaml config.yaml >nul
-  if not exist .env copy .env.example .env >nul
-  echo Созданы config.yaml и .env - впиши в них токены и настройки, затем запусти снова.
-  pause
-  exit /b 1
-)
-if not exist .env copy .env.example .env >nul
 set PYTHONUTF8=1
 .venv\Scripts\python -m platesh %*
 pause
