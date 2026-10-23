@@ -94,3 +94,37 @@ def test_delivery_file_resolved_relative_to_config(tmp_path):
     raw["bots"][0]["products"][1]["deliver"] = {"file": "files/guide.pdf"}
     product = parse_config(raw, tmp_path).bots[0].products["stars_only"]
     assert product.delivery.file == str(tmp_path / "files" / "guide.pdf")
+
+
+def test_access_and_security_options(tmp_path):
+    raw = make_raw_config(tmp_path)
+    raw["server"]["allowed_ips"] = "127.0.0.1, 10.0.0.0/8"
+    raw["bots"][0]["products"][0]["days"] = 30
+    raw["bots"][0]["products"][1]["deliver"] = {"text": "x", "protect_content": False}
+    raw["bots"][1]["guard"] = False
+    raw["bots"][1]["api_key"] = "ext-key"
+    cfg = parse_config(raw, tmp_path)
+    shop, ext = cfg.bots
+    assert cfg.server.allowed_ips == ("127.0.0.1", "10.0.0.0/8")
+    assert shop.products["vip"].days == 30 and shop.products["stars_only"].days is None
+    assert shop.products["vip"].delivery.protect_content is True  # по умолчанию пересылка запрещена
+    assert shop.products["stars_only"].delivery.protect_content is False
+    assert shop.guard is True and ext.guard is False
+    assert ext.api_key == "ext-key" and shop.api_key is None
+    assert shop.chats() == {-100123} and [p.id for p in shop.chat_products(-100123)] == ["vip"]
+
+
+@pytest.mark.parametrize("key", ["secret-key", "same"])
+def test_bot_keys_must_be_unique(tmp_path, key):
+    raw = make_raw_config(tmp_path)
+    raw["bots"][0]["api_key"] = "same"
+    raw["bots"][1]["api_key"] = key
+    with pytest.raises(ConfigError, match="свой ключ"):
+        parse_config(raw, tmp_path)
+
+
+def test_days_must_be_positive(tmp_path):
+    raw = make_raw_config(tmp_path)
+    raw["bots"][0]["products"][0]["days"] = 0
+    with pytest.raises(ConfigError, match="days"):
+        parse_config(raw, tmp_path)

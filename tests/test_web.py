@@ -130,3 +130,96 @@ async def test_cryptobot_webhook_endpoint(client, env):
     resp = await client.post("/webhooks/cryptobot", data=body, headers={"crypto-pay-api-signature": signature})
     assert resp.status == 200
     assert (await env.db.get_invoice(inv["id"])).status == PAID
+
+
+# ---------------------------------------------------------------------- ключи ботов, IP, доступы
+
+EXT_KEY = {"Authorization": "Bearer ext-bot-key"}
+
+
+@pytest.fixture
+async def scoped(tmp_path, aiohttp_client):
+    raw = make_raw_config(tmp_path)
+    raw["bots"][1]["api_key"] = "ext-bot-key"
+    raw["bots"][1]["products"] = [{"id": "premium", "title": "Премиум", "price": {"stars": 10}, "days": 30}]
+    env = await build_env(tmp_path, raw)
+    client = await aiohttp_client(create_app(env.cfg, env.registry, env.payments))
+    yield env, client
+    await env.notifier.close(grace=1)
+    await env.db.close()
+
+
+async def test_bot_key_sees_only_its_bot(scoped):
+    env, client = scoped
+    bots = (await (await client.get("/api/v1/bots", headers=EXT_KEY)).json())["result"]
+    assert [b["name"] for b in bots] == ["ext"] and bots[0]["products"][0]["days"] == 30
+
+    resp = await client.post("/api/v1/invoices", headers=EXT_KEY, json={"bot": "shop", "method": "stars", "product_id": "vip"})
+    assert resp.status == 403
+
+    shop_inv = (await (await client.post("/api/v1/invoices", headers=AUTH, json={
+        "bot": "shop", "method": "stars", "product_id": "vip", "user_id": BUYER_ID})).json())["result"]
+    assert (await client.get(f"/api/v1/invoices/{shop_inv['id']}", headers=EXT_KEY)).status == 404
+    listed = (await (await client.get("/api/v1/invoices", headers=EXT_KEY, params={"bot": "shop"})).json())["result"]
+    assert listed == []  # фильтр по чужому боту игнорируется — видны только свои
+
+
+async def test_bot_key_cannot_refund_or_grant(scoped):
+    env, client = scoped
+    inv = (await (await client.post("/api/v1/invoices", headers=EXT_KEY, json={
+        "bot": "ext", "method": "stars", "product_id": "premium", "user_id": BUYER_ID})).json())["result"]
+    await client.post("/api/v1/stars/paid", headers=EXT_KEY, json={
+        "bot": "ext", "payload": f"pl:{inv['id']}", "charge_id": "c1", "total_amount": 10, "currency": "XTR", "user_id": BUYER_ID})
+    assert (await client.post(f"/api/v1/invoices/{inv['id']}/refund", headers=EXT_KEY)).status == 403
+    grant = {"bot": "ext", "user_id": 1, "product_id": "premium"}
+    assert (await client.post("/api/v1/access/grant", headers=EXT_KEY, json=grant)).status == 403
+    assert (await client.post("/api/v1/access/grant", headers=AUTH, json=grant)).status == 200
+
+
+async def test_managed_bot_payments_cannot_be_confirmed_via_api(scoped):
+    env, client = scoped
+    inv = (await (await client.post("/api/v1/invoices", headers=AUTH, json={
+        "bot": "shop", "method": "stars", "product_id": "vip", "user_id": BUYER_ID})).json())["result"]
+    fake = {"bot": "shop", "payload": f"pl:{inv['id']}", "charge_id": "forged", "total_amount": 100,
+            "currency": "XTR", "user_id": BUYER_ID}
+    resp = await client.post("/api/v1/stars/paid", headers=AUTH, json=fake)
+    assert resp.status == 403
+    assert (await env.db.get_invoice(inv["id"])).status == "pending"
+
+
+async def test_access_endpoints(scoped):
+    env, client = scoped
+    params = {"bot": "ext", "user_id": str(BUYER_ID), "product_id": "premium"}
+    assert (await (await client.get("/api/v1/access", headers=EXT_KEY, params=params)).json())["result"]["active"] is False
+
+    inv = (await (await client.post("/api/v1/invoices", headers=EXT_KEY, json={
+        "bot": "ext", "method": "stars", "product_id": "premium", "user_id": BUYER_ID})).json())["result"]
+    await client.post("/api/v1/stars/paid", headers=EXT_KEY, json={
+        "bot": "ext", "payload": f"pl:{inv['id']}", "charge_id": "c1", "total_amount": 10, "currency": "XTR", "user_id": BUYER_ID})
+    result = (await (await client.get("/api/v1/access", headers=EXT_KEY, params=params)).json())["result"]
+    assert result["active"] is True and result["accesses"][0]["expires_at"]
+
+    resp = await client.post("/api/v1/access/revoke", headers=AUTH, json={"bot": "ext", "user_id": BUYER_ID, "product_id": "premium"})
+    assert (await resp.json())["result"]["revoked"] is True
+    assert (await (await client.get("/api/v1/access", headers=EXT_KEY, params=params)).json())["result"]["active"] is False
+
+
+async def test_allowed_ips(tmp_path, aiohttp_client):
+    raw = make_raw_config(tmp_path)
+    raw["server"]["allowed_ips"] = ["10.0.0.0/8"]
+    env = await build_env(tmp_path, raw)
+    try:
+        client = await aiohttp_client(create_app(env.cfg, env.registry, env.payments))
+        resp = await client.get("/api/v1/bots", headers=AUTH)
+        assert resp.status == 403 and "IP" in (await resp.json())["error"]
+        assert (await client.get("/health")).status == 200
+    finally:
+        await env.db.close()
+
+    raw["server"]["allowed_ips"] = ["127.0.0.1", "::1"]
+    env = await build_env(tmp_path, raw)
+    try:
+        client = await aiohttp_client(create_app(env.cfg, env.registry, env.payments))
+        assert (await client.get("/api/v1/bots", headers=AUTH)).status == 200
+    finally:
+        await env.db.close()

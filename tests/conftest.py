@@ -8,8 +8,19 @@ import pytest
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.base import BaseSession
-from aiogram.methods import GetMe, TelegramMethod
-from aiogram.types import Chat, ChatInviteLink, Message, User
+from aiogram.methods import GetChat, GetChatMember, GetMe, TelegramMethod
+from aiogram.types import (
+    AcceptedGiftTypes,
+    Chat,
+    ChatFullInfo,
+    ChatInviteLink,
+    ChatMemberAdministrator,
+    ChatMemberLeft,
+    ChatMemberMember,
+    ChatMemberOwner,
+    Message,
+    User,
+)
 
 from platesh.bots.registry import BotRegistry, BotRuntime
 from platesh.config import parse_config
@@ -22,6 +33,24 @@ EXT_TOKEN = "222222:external-token"
 CRYPTO_TOKEN = "12345:crypto-token"
 ADMIN_ID = 1000
 BUYER_ID = 555
+CHANNEL_ID = -100123
+
+
+def chat_member(status: str, user_id: int, **rights: bool):
+    user = User(id=user_id, is_bot=False, first_name="u")
+    if status == "administrator":
+        flags = {name: True for name in (
+            "can_be_edited", "can_manage_chat", "can_delete_messages", "can_manage_video_chats",
+            "can_restrict_members", "can_promote_members", "can_change_info", "can_invite_users",
+            "can_post_stories", "can_edit_stories", "can_delete_stories", "can_send_welcome_messages",
+        )}
+        flags.update(rights)
+        return ChatMemberAdministrator(user=user, is_anonymous=False, **flags)
+    if status == "creator":
+        return ChatMemberOwner(user=user, is_anonymous=False)
+    if status == "member":
+        return ChatMemberMember(user=user)
+    return ChatMemberLeft(user=user)
 
 
 class MockSession(BaseSession):
@@ -31,6 +60,9 @@ class MockSession(BaseSession):
         super().__init__()
         self.requests: list[TelegramMethod[Any]] = []
         self.errors: dict[type, Exception] = {}
+        # Участники чатов: (chat_id, user_id) -> статус. Сам бот по умолчанию — админ со всеми правами.
+        self.members: dict[tuple[int, int], Any] = {}
+        self.chat_info: dict[str, Any] = {"title": "VIP канал", "has_protected_content": True}
 
     async def close(self) -> None:
         pass
@@ -42,6 +74,20 @@ class MockSession(BaseSession):
         self.requests.append(method)
         if type(method) in self.errors:
             raise self.errors[type(method)]
+        if isinstance(method, GetChatMember):
+            member = self.members.get((method.chat_id, method.user_id))
+            if member is None:
+                member = "administrator" if method.user_id == bot.id else "left"
+            return chat_member(member, method.user_id) if isinstance(member, str) else member
+        if isinstance(method, GetChat):
+            return ChatFullInfo(
+                id=method.chat_id, type="channel", accent_color_id=0, max_reaction_count=11,
+                accepted_gift_types=AcceptedGiftTypes(
+                    unlimited_gifts=False, limited_gifts=False, unique_gifts=False, premium_subscription=False,
+                    gifts_from_channels=False,
+                ),
+                **self.chat_info,
+            )
         returning = method.__returning__
         if returning is Message:
             chat_id = getattr(method, "chat_id", 0)
@@ -118,7 +164,7 @@ def make_raw_config(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
                         "title": "VIP",
                         "description": "Доступ в канал",
                         "price": {"stars": 100, "crypto": "4.99"},
-                        "deliver": {"text": "Добро пожаловать!", "invite_chat_id": -100123},
+                        "deliver": {"text": "Добро пожаловать!", "invite_chat_id": CHANNEL_ID},
                     },
                     {"id": "stars_only", "title": "Гайд", "price": {"stars": 50}, "deliver": "Держи гайд"},
                 ],

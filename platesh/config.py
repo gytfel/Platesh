@@ -63,6 +63,7 @@ class Delivery:
     file: str | None = None
     invite_chat_id: int | None = None
     invite_hours: int = 24
+    protect_content: bool = True
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,11 @@ class Product:
     price_stars: int | None = None
     price_crypto: Decimal | None = None
     delivery: Delivery = field(default_factory=Delivery)
+    days: int | None = None  # срок доступа; None — навсегда
+
+    @property
+    def chat_id(self) -> int | None:
+        return self.delivery.invite_chat_id
 
 
 @dataclass
@@ -87,10 +93,19 @@ class BotConfig:
     texts: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_TEXTS))
     notify_url: str | None = None
     terms: str | None = None
+    guard: bool = True
+    api_key: str | None = None
 
     @property
     def managed(self) -> bool:
         return self.mode == "managed"
+
+    def chats(self) -> set[int]:
+        """Закрытые чаты/каналы, доступ в которые продаёт этот бот."""
+        return {p.chat_id for p in self.products.values() if p.chat_id is not None}
+
+    def chat_products(self, chat_id: int) -> list[Product]:
+        return [p for p in self.products.values() if p.chat_id == chat_id]
 
     def method_enabled(self, method: str) -> bool:
         if method not in self.payments:
@@ -132,6 +147,7 @@ class ServerConfig:
     port: int = 8080
     api_key: str | None = None
     webhook_secret: str | None = None
+    allowed_ips: tuple[str, ...] = ()
 
 
 @dataclass
@@ -145,6 +161,15 @@ class Config:
 
     def bot(self, name: str) -> BotConfig | None:
         return next((b for b in self.bots if b.name == name), None)
+
+
+MIN_KEY_LENGTH = 24
+
+
+def weak_keys(cfg: Config) -> list[str]:
+    """Названия слишком коротких ключей API (их проще подобрать)."""
+    keys = [("server.api_key", cfg.server.api_key)] + [(f"bots[{b.name}].api_key", b.api_key) for b in cfg.bots]
+    return [name for name, key in keys if key and len(key) < MIN_KEY_LENGTH]
 
 
 # --------------------------------------------------------------------------- helpers
@@ -295,6 +320,7 @@ def _delivery(data: Any, where: str, base_dir: Path) -> Delivery:
         file=file,
         invite_chat_id=_int(invite, f"{where}.invite_chat_id") if invite not in (None, "") else None,
         invite_hours=_int(data.get("invite_hours", 24), f"{where}.invite_hours", minimum=1),
+        protect_content=_bool(data.get("protect_content", True), f"{where}.protect_content"),
     )
 
 
@@ -315,6 +341,7 @@ def _product(data: Any, where: str, base_dir: Path) -> Product:
         price_stars=_int(stars, f"{where}.price.stars", minimum=1) if stars not in (None, "") else None,
         price_crypto=_decimal(crypto, f"{where}.price.crypto") if crypto not in (None, "") else None,
         delivery=_delivery(data.get("deliver"), f"{where}.deliver", base_dir),
+        days=_int(data["days"], f"{where}.days", minimum=1) if data.get("days") not in (None, "") else None,
     )
 
 
@@ -369,6 +396,8 @@ def _bot(data: Any, where: str, *, admins: tuple[int, ...], crypto: CryptoConfig
         texts=texts,
         notify_url=_str(data, "notify_url", where, default=notify_url),
         terms=_str(data, "terms", where),
+        guard=_bool(data.get("guard", True), f"{where}.guard"),
+        api_key=_str(data, "api_key", where),
     )
 
 
@@ -383,6 +412,7 @@ def parse_config(raw: Any, base_dir: Path) -> Config:
         port=_int(server_data.get("port", 8080), "server.port", minimum=1),
         api_key=_str(server_data, "api_key", "server"),
         webhook_secret=_str(server_data, "webhook_secret", "server"),
+        allowed_ips=_str_list(server_data.get("allowed_ips"), "server.allowed_ips"),
     )
 
     crypto_data = _section(data.get("cryptobot"), "cryptobot")
@@ -405,6 +435,8 @@ def parse_config(raw: Any, base_dir: Path) -> Config:
             raise ConfigError(f"bots: повторяется имя «{bot.name}»")
         if any(b.token == bot.token for b in bots):
             raise ConfigError(f"bots[{bot.name}]: этот токен уже используется другим ботом")
+        if bot.api_key and (bot.api_key == server.api_key or any(b.api_key == bot.api_key for b in bots)):
+            raise ConfigError(f"bots[{bot.name}].api_key: у каждого бота должен быть свой ключ, отличный от server.api_key")
         bots.append(bot)
     if not bots:
         raise ConfigError("bots: ни у одного бота не задан token")

@@ -17,8 +17,9 @@ server:
   enabled: true
   host: 0.0.0.0
   port: 8080
-  api_key: ${PLATESH_API_KEY:-}          # без ключа /api/* отключён
+  api_key: ${PLATESH_API_KEY:-}          # главный ключ (все боты, возвраты). Создать: python -m platesh genkey
   webhook_secret: ${PLATESH_WEBHOOK_SECRET:-}  # подпись уведомлений на notify_url
+  # allowed_ips: [127.0.0.1, 10.0.0.0/8]  # с каких адресов можно обращаться к /api/*
 
 # Куда слать уведомления об оплатах (POST JSON). Можно переопределить у каждого бота.
 # notify_url: https://example.com/platesh-webhook
@@ -52,6 +53,9 @@ bots:
     welcome: "👋 Привет! Здесь можно купить доступ в закрытый канал и гайды."
     support: "По вопросам оплаты пиши @your_support"
     # admins: [987654321]          # дополнительные админы только этого бота
+    # Охрана закрытых каналов (по умолчанию включена): заявки на вход одобряются
+    # только оплатившим, а кто вошёл в обход оплаты — удаляется.
+    guard: true
     products:
       - id: vip
         title: VIP-канал на месяц
@@ -59,10 +63,13 @@ bots:
         price:
           stars: 500               # цена в Telegram Stars (целое число)
           crypto: 9.99             # цена в cryptobot.currency (USD)
+        days: 30                   # подписка: через 30 дней доступ закроется, если не продлить.
+                                   # Без days — доступ навсегда.
         deliver:
           text: "🎉 Спасибо! Добро пожаловать в VIP."
           invite_chat_id: -1001234567890   # бот должен быть админом канала
-          invite_hours: 24                 # сколько живёт одноразовая ссылка
+          invite_hours: 24                 # сколько живёт личная ссылка
+          # protect_content: false         # разрешить пересылку (по умолчанию запрещена)
 
       - id: guide
         title: PDF-гайд
@@ -89,7 +96,15 @@ bots:
   - name: my_own_bot               # бот со своим кодом, Platesh только принимает оплату
     token: ${MY_OWN_BOT_TOKEN:-}
     mode: external
+    api_key: ${MY_OWN_BOT_API_KEY:-}   # ключ только для этого бота (без возвратов и чужих ботов)
     payments: [stars, crypto]
     notify_url: https://example.com/payments/webhook
+    products:
+      - id: premium                # для пейволла: без оплаты бот не отвечает
+        title: Премиум на месяц
+        price:
+          stars: 200
+          crypto: 3.99
+        days: 30
     # texts:                       # любые тексты можно переопределить (см. platesh/texts.py)
     #   paid: "Оплата прошла, доступ уже открыт!"

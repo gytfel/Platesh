@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import html
+import logging
 from datetime import datetime
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command, CommandObject, CommandStart
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
+from aiogram.filters import JOIN_TRANSITION, ChatMemberUpdatedFilter, Command, CommandObject, CommandStart
 from aiogram.types import (
     BotCommand,
     CallbackQuery,
+    ChatJoinRequest,
+    ChatMemberUpdated,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
@@ -20,8 +23,15 @@ from aiogram.types import (
 from ..config import CRYPTO, STARS, Product
 from ..models import EXPIRED, PAID, REFUNDED
 from ..payments import PaymentError, PaymentService
-from ..texts import format_amount
+from ..texts import format_amount, format_date
 from .registry import BotRuntime
+
+log = logging.getLogger(__name__)
+
+
+def price_text(rt: BotRuntime, product: Product) -> str:
+    price = rt.cfg.product_price(product)
+    return f"{price} за {product.days} дн." if product.days else price
 
 
 def catalog_view(rt: BotRuntime, user_id: int | None) -> tuple[str, InlineKeyboardMarkup | None]:
@@ -52,9 +62,23 @@ def product_view(rt: BotRuntime, product: Product) -> tuple[str, InlineKeyboardM
         "product",
         title=html.escape(product.title),
         description=product.description,  # описание может содержать HTML-разметку
-        price=rt.cfg.product_price(product),
+        price=price_text(rt, product),
     )
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def offer_access(rt: BotRuntime, user_chat_id: int, chat_id: int, chat_title: str | None) -> None:
+    """Сообщение «вход платный» с кнопками товаров, которые открывают этот чат."""
+    rows = [
+        [InlineKeyboardButton(text=f"{p.title} · {price_text(rt, p)}", callback_data=f"p:{p.id}")]
+        for p in rt.cfg.chat_products(chat_id)
+        if rt.cfg.methods_for(p)
+    ]
+    text = rt.cfg.text("access_required", chat=html.escape(chat_title or "Канал"))
+    try:
+        await rt.bot.send_message(user_chat_id, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None)
+    except TelegramAPIError:
+        pass  # человек не запускал бота — написать ему нельзя
 
 
 async def show(callback: CallbackQuery, text: str, markup: InlineKeyboardMarkup | None) -> None:
@@ -161,15 +185,74 @@ def create_shop_router() -> Router:
 
     @router.message(Command("purchases"))
     async def purchases(message: Message, rt: BotRuntime, payments: PaymentService) -> None:
-        items = await payments.db.list_invoices(bot=rt.name, user_id=message.from_user.id, status=PAID, limit=20)
-        if not items:
+        user_id = message.from_user.id
+        accesses = await payments.access.active_accesses(rt, user_id)
+        items = await payments.db.list_invoices(bot=rt.name, user_id=user_id, status=PAID, limit=20)
+        if not items and not accesses:
             await message.answer(rt.cfg.text("purchases_empty"))
             return
-        lines = [rt.cfg.text("purchases_title"), ""]
-        for inv in items:
-            date = datetime.fromtimestamp(inv.paid_at or inv.created_at).strftime("%d.%m.%Y")
-            lines.append(f"• {html.escape(inv.title)} — {inv.price}, {date}")
-        await message.answer("\n".join(lines))
+        lines = []
+        if accesses:
+            lines += [rt.cfg.text("my_access_title"), ""]
+            for a in accesses:
+                product = rt.cfg.products.get(a.product_id)
+                title = html.escape(product.title if product else a.product_id)
+                until = rt.cfg.text("access_date", date=format_date(a.expires_at)) if a.expires_at else rt.cfg.text("access_forever")
+                lines.append(f"• {title} — {until}")
+            lines.append("")
+        if items:
+            lines += [rt.cfg.text("purchases_title"), ""]
+            for inv in items:
+                date = datetime.fromtimestamp(inv.paid_at or inv.created_at).strftime("%d.%m.%Y")
+                lines.append(f"• {html.escape(inv.title)} — {inv.price}, {date}")
+        await message.answer("\n".join(lines).strip())
+
+    @router.chat_join_request()
+    async def join_request(request: ChatJoinRequest, rt: BotRuntime, payments: PaymentService) -> None:
+        """Заявка на вход в закрытый чат: одобряем только тем, у кого оплачен доступ."""
+        chat_id = request.chat.id
+        if chat_id not in rt.cfg.chats():
+            return
+        try:
+            if await payments.access.has_chat_access(rt, request.from_user.id, chat_id):
+                await request.approve()
+                return
+            if not rt.cfg.guard:
+                return  # охрана выключена — заявку рассматривает владелец вручную
+            await request.decline()
+        except TelegramBadRequest as exc:
+            log.info("Заявка %s в %s уже обработана: %s", request.from_user.id, chat_id, exc.message)
+            return
+        log.info("Бот «%s»: заявка %s в чат %s отклонена — нет оплаты", rt.name, request.from_user.id, chat_id)
+        await offer_access(rt, request.user_chat_id, chat_id, request.chat.title)
+
+    @router.chat_member(ChatMemberUpdatedFilter(member_status_changed=JOIN_TRANSITION))
+    async def member_joined(event: ChatMemberUpdated, rt: BotRuntime, payments: PaymentService) -> None:
+        """Охрана: кто попал в закрытый чат в обход оплаты (старая или публичная ссылка), удаляется."""
+        chat_id = event.chat.id
+        member = event.new_chat_member
+        user = member.user
+        if not rt.cfg.guard or chat_id not in rt.cfg.chats():
+            return
+        if user.is_bot or member.status in ("administrator", "creator"):
+            return
+        # Добавил сам бот (одобрил заявку) или админ бота вручную — пропускаем.
+        if event.from_user.id != user.id and (event.from_user.id == rt.id or rt.is_admin(event.from_user.id)):
+            return
+        if await payments.access.has_chat_access(rt, user.id, chat_id):
+            return
+        try:
+            await payments.access.kick(rt, chat_id, user.id)
+        except TelegramAPIError as exc:
+            log.warning("Бот «%s»: не удалось удалить %s из %s: %s", rt.name, user.id, chat_id, exc)
+            await payments.notifier.alert(
+                rt,
+                f"⚠️ В «{html.escape(event.chat.title or str(chat_id))}» вошёл <code>{user.id}</code> без оплаты, "
+                f"но удалить его не удалось: <code>{html.escape(exc.message)}</code>",
+            )
+            return
+        log.info("Бот «%s»: %s вошёл в %s без оплаты и удалён", rt.name, user.id, chat_id)
+        await offer_access(rt, user.id, chat_id, event.chat.title)
 
     @router.message(Command("paysupport"))
     async def paysupport(message: Message, rt: BotRuntime) -> None:

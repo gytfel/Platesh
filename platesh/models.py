@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 from typing import Any
@@ -49,6 +50,31 @@ class Invoice:
         data = asdict(self)
         data["amount"] = format_amount(self.amount)
         return data
+
+
+@dataclass
+class Access:
+    """Право пользователя на товар. expires_at=None — навсегда."""
+
+    bot: str
+    user_id: int
+    product_id: str
+    expires_at: int | None
+    reminded: bool = False
+    revoked: bool = False
+    updated_at: int = 0
+
+    def is_active(self, now: float | None = None) -> bool:
+        if self.revoked:
+            return False
+        return self.expires_at is None or self.expires_at > (time.time() if now is None else now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "product_id": self.product_id,
+            "expires_at": self.expires_at,
+            "active": self.is_active(),
+        }
 
 
 def parse_payload(payload: str | None) -> str | None:

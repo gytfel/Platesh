@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 
 DEFAULT_TEXTS: dict[str, str] = {
@@ -24,7 +25,18 @@ DEFAULT_TEXTS: dict[str, str] = {
     "invoice_expired": "Срок счёта истёк. Создай новый.",
     "already_paid": "Этот счёт уже оплачен ✅",
     "paid": "✅ Оплата получена! Спасибо за покупку.",
-    "invite": "🔗 Ссылка для входа (одноразовая, действует {hours} ч.):\n{link}",
+    "invite": "🔗 Твоя личная ссылка для входа (действует {hours} ч.):\n{link}",
+    "invite_request_hint": "\nНажми «Подать заявку» — бот одобрит её автоматически.",
+    "access_until": "⏳ Доступ действует до <b>{date}</b>.",
+    "access_extended": "✅ «{title}»: доступ продлён до <b>{date}</b>.",
+    "sub_reminder": "⏰ Доступ «{title}» заканчивается <b>{date}</b>. Продли заранее, чтобы не потерять его.",
+    "sub_expired": "⌛ Доступ «{title}» закончился. Продлить можно в любой момент.",
+    "renew_button": "🔄 Продлить",
+    "access_required": "🔒 «{chat}» — только для тех, кто оплатил доступ. Оформить можно здесь 👇",
+    "access_revoked": "Доступ «{title}» закрыт.",
+    "my_access_title": "🔑 Твои доступы:",
+    "access_forever": "навсегда",
+    "access_date": "до {date}",
     "purchases_empty": "У тебя пока нет покупок.",
     "purchases_title": "🧾 Твои покупки:",
     "support": "По вопросам оплаты и возвратов напиши администратору бота.",
@@ -35,6 +47,11 @@ DEFAULT_TEXTS: dict[str, str] = {
 }
 
 CURRENCY_SIGNS = {"XTR": "⭐"}
+DATE_FORMAT = "%d.%m.%Y %H:%M"
+
+
+def format_date(timestamp: int) -> str:
+    return datetime.fromtimestamp(timestamp).strftime(DATE_FORMAT)
 
 
 def format_amount(amount: Decimal | int | str) -> str:

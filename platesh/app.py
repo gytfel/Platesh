@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import signal
 from contextlib import suppress
@@ -10,16 +11,20 @@ from contextlib import suppress
 from aiogram.exceptions import TelegramAPIError
 from aiohttp import web
 
+from .access import diagnose
 from .bots import build_dispatcher
 from .bots.registry import BotRegistry
 from .bots.shop import bot_commands
-from .config import Config
+from .config import Config, weak_keys
 from .db import Database
 from .notifier import Notifier
 from .payments import PaymentService
 from .web import create_app
 
 log = logging.getLogger("platesh")
+
+
+ACCESS_CHECK_INTERVAL = 60
 
 
 async def crypto_poller(payments: PaymentService, interval: float) -> None:
@@ -29,6 +34,29 @@ async def crypto_poller(payments: PaymentService, interval: float) -> None:
         except Exception:
             log.exception("Ошибка при опросе CryptoBot")
         await asyncio.sleep(interval)
+
+
+async def access_watcher(payments: PaymentService) -> None:
+    """Напоминания о продлении и удаление из закрытых чатов по окончании подписки."""
+    while True:
+        try:
+            await payments.access.process_expirations()
+        except Exception:
+            log.exception("Ошибка при проверке сроков доступа")
+        await asyncio.sleep(ACCESS_CHECK_INTERVAL)
+
+
+async def check_chats(registry: BotRegistry, payments: PaymentService, notifier: Notifier) -> None:
+    for rt in registry.all():
+        if not rt.cfg.chats():
+            continue
+        problems = await diagnose(rt)
+        for problem in problems:
+            log.warning("Бот «%s»: %s", rt.name, problem)
+        if problems:
+            await notifier.alert(
+                rt, "⚠️ <b>Platesh: проверь закрытые каналы</b>\n\n" + "\n".join(f"• {html.escape(p)}" for p in problems)
+            )
 
 
 async def _wait_for_stop_signal() -> None:
@@ -60,10 +88,14 @@ async def run(cfg: Config) -> None:
             await web.TCPSite(runner, cfg.server.host, cfg.server.port).start()
             log.info("HTTP API: http://%s:%s (вебхук CryptoBot: /webhooks/cryptobot)", cfg.server.host, cfg.server.port)
             if not cfg.server.api_key:
-                log.warning("server.api_key не задан — /api/* отключён, работают только боты и вебхук CryptoBot")
+                log.warning("server.api_key не задан — главный ключ API отключён")
+            for name in weak_keys(cfg):
+                log.warning("%s слишком короткий — сгенерируй надёжный: python -m platesh genkey", name)
 
         if cfg.crypto_poll_interval > 0 and payments.crypto_clients():
             tasks.append(asyncio.create_task(crypto_poller(payments, cfg.crypto_poll_interval)))
+        tasks.append(asyncio.create_task(access_watcher(payments)))
+        await check_chats(registry, payments, notifier)
 
         managed = registry.managed()
         for rt in managed:

@@ -5,13 +5,15 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import secrets
 import sys
 
 from aiogram.exceptions import TelegramAPIError
 from aiogram.utils.token import TokenValidationError
 
-from .bots.registry import create_bot
-from .config import CRYPTO, STARS, Config, ConfigError, load_config
+from .access import diagnose
+from .bots.registry import BotRuntime, create_bot
+from .config import CRYPTO, MIN_KEY_LENGTH, STARS, Config, ConfigError, load_config, weak_keys
 from .cryptopay import CryptoPayClient, CryptoPayError
 
 
@@ -30,9 +32,11 @@ async def check(cfg: Config) -> bool:
             print(f"❌ {b.name}: неверный формат токена")
             good = False
             continue
+        problems: list[str] = []
         try:
             me = await bot.get_me()
             status = f"✅ {b.name}: @{me.username} ({b.mode})"
+            problems = await diagnose(BotRuntime(cfg=b, bot=bot, id=me.id, username=me.username or ""))
         except TelegramAPIError as exc:
             status = f"❌ {b.name}: {exc}"
             good = False
@@ -59,14 +63,25 @@ async def check(cfg: Config) -> bool:
         print(f"   товаров: {len(b.products)}, админы: {', '.join(map(str, b.admins)) or 'не заданы'}")
         if b.notify_url:
             print(f"   notify_url: {b.notify_url}")
+        if b.chats():
+            print(f"   закрытые каналы: {len(b.chats())}, охрана входа: {'вкл' if b.guard else 'выкл'}")
+        for problem in problems:
+            print(f"   ⚠️ {problem}")
+    for name in weak_keys(cfg):
+        print(f"⚠️ {name} короче {MIN_KEY_LENGTH} символов — сгенерируй надёжный: python -m platesh genkey")
     return good
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="platesh", description="Платёжный шлюз Stars + CryptoBot для Telegram-ботов")
-    parser.add_argument("command", nargs="?", default="run", choices=["run", "check"], help="run — запустить, check — проверить настройки")
+    parser.add_argument("command", nargs="?", default="run", choices=["run", "check", "genkey"],
+                        help="run — запустить, check — проверить настройки, genkey — придумать ключ API")
     parser.add_argument("-c", "--config", default="config.yaml", help="путь к config.yaml")
     args = parser.parse_args(argv)
+
+    if args.command == "genkey":
+        print(secrets.token_urlsafe(32))
+        return
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
     try:

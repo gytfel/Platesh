@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, User
 
+from .access import AccessService
 from .config import CRYPTO, FIAT_CURRENCIES, STARS, Config, Product
 from .cryptopay import CryptoPayClient, CryptoPayError, invoice_url, verify_signature
 from .db import Database
@@ -54,6 +55,7 @@ class PaymentService:
         self.db = db
         self.registry = registry
         self.notifier = notifier
+        self.access = AccessService(db, registry, notifier)
         self._crypto_factory = crypto_factory
         self._crypto: dict[tuple[str, bool], CryptoPayClient] = {}
         self._known_users: dict[tuple[str, int], tuple[str | None, str | None]] = {}
@@ -216,8 +218,11 @@ class PaymentService:
     async def _on_paid(self, rt: BotRuntime, inv: Invoice) -> None:
         log.info("Бот «%s»: счёт %s оплачен (%s)", rt.name, inv.id, inv.price)
         product = rt.cfg.products.get(inv.product_id) if inv.product_id else None
+        access, renewed = None, False
+        if product is not None and inv.user_id is not None:
+            access, renewed = await self.access.grant(rt, inv.user_id, product)
         try:
-            await deliver(rt, inv, product)
+            await deliver(rt, self.access, inv.user_id, product, access=access, renewed=renewed, tag=inv.id)
         except Exception as exc:  # выдача не должна ломать приём платежа
             log.exception("Бот «%s»: не удалось выдать покупку по счёту %s", rt.name, inv.id)
             await self.notifier.alert(
@@ -225,7 +230,7 @@ class PaymentService:
                 f"⚠️ Счёт <code>{inv.id}</code> оплачен, но выдать покупку не удалось: "
                 f"<code>{type(exc).__name__}: {exc}</code>\nВыдай вручную покупателю <code>{inv.user_id}</code>.",
             )
-        self.notifier.payment_received(rt, inv)
+        self.notifier.payment_received(rt, inv, access)
 
     # ------------------------------------------------------------------ Telegram Stars
 
@@ -376,6 +381,9 @@ class PaymentService:
             raise PaymentError(f"Telegram отклонил возврат: {exc.message}") from exc
         await self.db.set_status(inv.id, REFUNDED, expected=PAID)
         inv = await self.db.get_invoice(inv.id)
+        if inv.product_id and inv.user_id:
+            # Деньги вернули — доступ закрываем (и удаляем из закрытого чата).
+            await self.access.revoke(rt, inv.user_id, inv.product_id)
         try:
             await rt.bot.send_message(inv.user_id, rt.cfg.text("refunded", title=inv.title, amount=inv.price))
         except TelegramAPIError:

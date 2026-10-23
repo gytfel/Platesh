@@ -15,7 +15,8 @@ from aiogram.exceptions import TelegramAPIError
 
 from .config import Config
 from .db import Database
-from .models import Invoice
+from .models import Access, Invoice
+from .texts import format_date
 
 if TYPE_CHECKING:
     from .bots.registry import BotRuntime
@@ -67,32 +68,41 @@ class Notifier:
                 # Чаще всего админ ещё не нажал /start в этом боте.
                 log.warning("Не удалось уведомить админа %s через @%s: %s", admin_id, rt.username, exc)
 
-    async def _buyer(self, inv: Invoice) -> dict[str, Any]:
-        user = await self.db.get_user(inv.bot, inv.user_id) if inv.user_id else None
+    async def _buyer(self, bot: str, user_id: int | None) -> dict[str, Any]:
+        user = await self.db.get_user(bot, user_id) if user_id else None
         return {
-            "id": inv.user_id,
+            "id": user_id,
             "username": user.get("username") if user else None,
             "first_name": user.get("first_name") if user else None,
         }
 
-    async def invoice_event(self, rt: BotRuntime, inv: Invoice, event: str) -> None:
-        buyer = await self._buyer(inv)
-        await self.alert(rt, self._format(rt, inv, event, buyer))
-        url = rt.cfg.notify_url
-        if url:
-            data = {
-                "event": event,
-                "invoice": inv.to_dict(),
-                "bot": {"name": rt.name, "id": rt.id, "username": rt.username},
-                "user": buyer,
-            }
-            self._spawn(self._deliver_webhook(url, event, data))
+    def _post(self, rt: BotRuntime, event: str, data: dict[str, Any]) -> None:
+        if rt.cfg.notify_url:
+            body = {"event": event, **data, "bot": {"name": rt.name, "id": rt.id, "username": rt.username}}
+            self._spawn(self._deliver_webhook(rt.cfg.notify_url, event, body))
 
-    def payment_received(self, rt: BotRuntime, inv: Invoice) -> None:
-        self._spawn(self.invoice_event(rt, inv, "invoice_paid"))
+    async def invoice_event(self, rt: BotRuntime, inv: Invoice, event: str, access: Access | None = None) -> None:
+        buyer = await self._buyer(inv.bot, inv.user_id)
+        text = self._format(rt, inv, event, buyer)
+        if access is not None and access.expires_at:
+            text += f"\nДоступ до: {format_date(access.expires_at)}"
+        await self.alert(rt, text)
+        data: dict[str, Any] = {"invoice": inv.to_dict(), "user": buyer}
+        if access is not None:
+            data["access"] = access.to_dict()
+        self._post(rt, event, data)
+
+    def payment_received(self, rt: BotRuntime, inv: Invoice, access: Access | None = None) -> None:
+        self._spawn(self.invoice_event(rt, inv, "invoice_paid", access))
 
     def refunded(self, rt: BotRuntime, inv: Invoice) -> None:
         self._spawn(self.invoice_event(rt, inv, "invoice_refunded"))
+
+    def access_expired(self, rt: BotRuntime, access: Access) -> None:
+        async def send() -> None:
+            self._post(rt, "access_expired", {"access": access.to_dict(), "user": await self._buyer(rt.name, access.user_id)})
+
+        self._spawn(send())
 
     @staticmethod
     def _format(rt: BotRuntime, inv: Invoice, event: str, buyer: dict[str, Any]) -> str:

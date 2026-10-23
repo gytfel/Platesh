@@ -10,7 +10,7 @@ from typing import Any
 
 import aiosqlite
 
-from .models import EXPIRED, PAID, PENDING, Invoice
+from .models import EXPIRED, PAID, PENDING, Access, Invoice
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS invoices (
@@ -37,6 +37,18 @@ CREATE INDEX IF NOT EXISTS invoices_status ON invoices (method, status);
 CREATE INDEX IF NOT EXISTS invoices_user ON invoices (bot, user_id);
 CREATE INDEX IF NOT EXISTS invoices_external ON invoices (method, external_id);
 
+CREATE TABLE IF NOT EXISTS accesses (
+    bot        TEXT NOT NULL,
+    user_id    INTEGER NOT NULL,
+    product_id TEXT NOT NULL,
+    expires_at INTEGER,
+    reminded   INTEGER NOT NULL DEFAULT 0,
+    revoked    INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (bot, user_id, product_id)
+);
+CREATE INDEX IF NOT EXISTS accesses_expiry ON accesses (revoked, expires_at);
+
 CREATE TABLE IF NOT EXISTS users (
     bot        TEXT NOT NULL,
     user_id    INTEGER NOT NULL,
@@ -48,6 +60,13 @@ CREATE TABLE IF NOT EXISTS users (
 """
 
 _COLUMNS = [f.name for f in fields(Invoice)]
+
+
+def _row_to_access(row: aiosqlite.Row) -> Access:
+    data = dict(row)
+    data["reminded"] = bool(data["reminded"])
+    data["revoked"] = bool(data["revoked"])
+    return Access(**data)
 
 
 def _row_to_invoice(row: aiosqlite.Row) -> Invoice:
@@ -183,6 +202,55 @@ class Database:
             count, total = totals.get(row["currency"], (0, Decimal(0)))
             totals[row["currency"]] = (count + 1, total + Decimal(row["amount"]))
         return [(cur, count, total) for cur, (count, total) in sorted(totals.items())]
+
+    # ------------------------------------------------------------------ accesses
+
+    async def get_access(self, bot: str, user_id: int, product_id: str) -> Access | None:
+        rows = await self._fetch(
+            "SELECT * FROM accesses WHERE bot = ? AND user_id = ? AND product_id = ?", bot, user_id, product_id
+        )
+        return _row_to_access(rows[0]) if rows else None
+
+    async def save_access(self, access: Access) -> None:
+        access.updated_at = int(time.time())
+        await self._write(
+            "INSERT INTO accesses (bot, user_id, product_id, expires_at, reminded, revoked, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (bot, user_id, product_id) DO UPDATE SET"
+            " expires_at = excluded.expires_at, reminded = excluded.reminded,"
+            " revoked = excluded.revoked, updated_at = excluded.updated_at",
+            access.bot, access.user_id, access.product_id, access.expires_at,
+            int(access.reminded), int(access.revoked), access.updated_at,
+        )
+
+    async def user_accesses(self, bot: str, user_id: int) -> list[Access]:
+        rows = await self._fetch(
+            "SELECT * FROM accesses WHERE bot = ? AND user_id = ? ORDER BY product_id", bot, user_id
+        )
+        return [_row_to_access(r) for r in rows]
+
+    async def expiring_accesses(self, before: int) -> list[Access]:
+        """Действующие подписки, которые закончатся раньше before и о которых ещё не напоминали."""
+        rows = await self._fetch(
+            "SELECT * FROM accesses WHERE revoked = 0 AND reminded = 0 AND expires_at IS NOT NULL"
+            " AND expires_at <= ?",
+            before,
+        )
+        return [_row_to_access(r) for r in rows]
+
+    async def expired_accesses(self, now: int) -> list[Access]:
+        rows = await self._fetch(
+            "SELECT * FROM accesses WHERE revoked = 0 AND expires_at IS NOT NULL AND expires_at <= ?", now
+        )
+        return [_row_to_access(r) for r in rows]
+
+    async def count_active_accesses(self, bot: str | None = None) -> int:
+        sql = "SELECT COUNT(*) FROM accesses WHERE revoked = 0 AND (expires_at IS NULL OR expires_at > ?)"
+        args: list[Any] = [int(time.time())]
+        if bot is not None:
+            sql += " AND bot = ?"
+            args.append(bot)
+        rows = await self._fetch(sql, *args)
+        return int(rows[0][0])
 
     # ------------------------------------------------------------------ users
 

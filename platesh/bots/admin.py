@@ -7,12 +7,16 @@ from datetime import datetime
 from decimal import Decimal
 
 from aiogram import Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject, Filter
 from aiogram.types import Message
 
+from ..access import diagnose
+from ..config import Product
+from ..delivery import deliver
 from ..models import PENDING, Invoice
 from ..payments import PaymentError, PaymentService
-from ..texts import format_price
+from ..texts import format_date, format_price
 from .registry import BotRuntime
 
 STATUS_ICONS = {"paid": "✅", "pending": "⏳", "expired": "⌛", "refunded": "↩️", "failed": "❌"}
@@ -22,7 +26,11 @@ HELP = (
     "/stats — выручка и покупатели\n"
     "/payments — последние оплаты\n"
     "/invoice <code>ID</code> — подробности счёта\n"
-    "/refund <code>ID</code> — вернуть оплату Stars"
+    "/refund <code>ID</code> — вернуть оплату Stars (доступ закроется)\n\n"
+    "/access <code>USER_ID</code> — доступы пользователя\n"
+    "/grant <code>USER_ID товар [дней]</code> — выдать доступ без оплаты\n"
+    "/revoke <code>USER_ID товар</code> — закрыть доступ и удалить из канала\n"
+    "/checkchats — проверить настройки закрытых каналов"
 )
 
 
@@ -57,7 +65,8 @@ def create_admin_router() -> Router:
         today = int(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
         text = (
             f"📊 <b>@{rt.username}</b>\n"
-            f"Покупателей: {await db.count_users(rt.name)}\n\n"
+            f"Покупателей: {await db.count_users(rt.name)}\n"
+            f"Активных доступов: {await db.count_active_accesses(rt.name)}\n\n"
             f"Сегодня:\n{_revenue_lines(await db.revenue(bot=rt.name, since=today))}\n"
             f"За всё время:\n{_revenue_lines(await db.revenue(bot=rt.name))}"
         )
@@ -100,5 +109,77 @@ def create_admin_router() -> Router:
             await message.answer(f"❌ {html.escape(str(exc))}")
             return
         await message.answer(f"↩️ Возврат выполнен: {inv.price}, счёт <code>{inv.id}</code>")
+
+    def parse_target(command: CommandObject, rt: BotRuntime, usage: str) -> tuple[int, Product, list[str]] | str:
+        args = (command.args or "").split()
+        if len(args) < 2 or not args[0].isdigit():
+            return f"Формат: {usage}\nТовары: {', '.join(rt.cfg.products) or '—'}"
+        product = rt.cfg.products.get(args[1])
+        if product is None:
+            return f"Товар «{html.escape(args[1])}» не найден. Есть: {', '.join(rt.cfg.products) or '—'}"
+        return int(args[0]), product, args[2:]
+
+    @router.message(Command("grant"))
+    async def grant(message: Message, command: CommandObject, rt: BotRuntime, payments: PaymentService) -> None:
+        target = parse_target(command, rt, "/grant USER_ID товар [дней]")
+        if isinstance(target, str):
+            await message.answer(target)
+            return
+        user_id, product, rest = target
+        days = None
+        if rest:
+            if not rest[0].isdigit() or int(rest[0]) < 1:
+                await message.answer("Количество дней — целое число больше нуля")
+                return
+            days = int(rest[0])
+        access, renewed = await payments.access.grant(rt, user_id, product, days=days)
+        until = f"до {format_date(access.expires_at)}" if access.expires_at else "навсегда"
+        answer = f"✅ Доступ «{html.escape(product.title)}» для <code>{user_id}</code> {until}."
+        try:
+            await deliver(rt, payments.access, user_id, product, access=access, renewed=renewed, tag=f"grant {user_id}")
+        except TelegramAPIError as exc:
+            answer += (f"\n⚠️ Отправить покупку не удалось ({html.escape(exc.message)}). "
+                       f"Пусть пользователь нажмёт /start в боте, и выдай доступ ещё раз.")
+        await message.answer(answer)
+
+    @router.message(Command("revoke"))
+    async def revoke(message: Message, command: CommandObject, rt: BotRuntime, payments: PaymentService) -> None:
+        target = parse_target(command, rt, "/revoke USER_ID товар")
+        if isinstance(target, str):
+            await message.answer(target)
+            return
+        user_id, product, _ = target
+        if await payments.access.revoke(rt, user_id, product.id):
+            await message.answer(f"🚫 Доступ «{html.escape(product.title)}» для <code>{user_id}</code> закрыт.")
+        else:
+            await message.answer("У пользователя нет активного доступа к этому товару.")
+
+    @router.message(Command("access"))
+    async def show_access(message: Message, command: CommandObject, rt: BotRuntime, payments: PaymentService) -> None:
+        arg = (command.args or "").strip()
+        if not arg.isdigit():
+            await message.answer("Формат: /access USER_ID")
+            return
+        items = await payments.db.user_accesses(rt.name, int(arg))
+        if not items:
+            await message.answer("Доступов нет.")
+            return
+        lines = [f"🔑 Доступы <code>{arg}</code>:"]
+        for a in items:
+            state = ("✅ навсегда" if a.expires_at is None else f"✅ до {format_date(a.expires_at)}") if a.is_active() \
+                else "⛔ закрыт"
+            lines.append(f"• {html.escape(a.product_id)} — {state}")
+        await message.answer("\n".join(lines))
+
+    @router.message(Command("checkchats"))
+    async def check_chats(message: Message, rt: BotRuntime, payments: PaymentService) -> None:
+        if not rt.cfg.chats():
+            await message.answer("У товаров этого бота нет закрытых каналов (deliver.invite_chat_id).")
+            return
+        problems = await diagnose(rt)
+        if not problems:
+            await message.answer("✅ Закрытые каналы настроены правильно.")
+            return
+        await message.answer("⚠️ <b>Что исправить:</b>\n\n" + "\n".join(f"• {html.escape(p)}" for p in problems))
 
     return router

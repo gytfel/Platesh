@@ -52,7 +52,9 @@ async def test_stars_full_flow(env):
     assert buyer_msgs[0] == "Добро пожаловать!"
     assert "https://t.me/+one-time" in buyer_msgs[1]
     invite = session.calls(CreateChatInviteLink)[0]
-    assert invite.chat_id == -100123 and invite.member_limit == 1
+    # Managed-бот выдаёт ссылку «по заявке»: войдёт только тот, у кого оплачен доступ.
+    assert invite.chat_id == -100123 and invite.creates_join_request and invite.member_limit is None
+    assert all(m.protect_content for m in session.calls(SendMessage) if m.chat_id == BUYER_ID)
     admin_msgs = messages_to(session, ADMIN_ID)
     assert len(admin_msgs) == 1 and "Новая оплата" in admin_msgs[0] and inv.id in admin_msgs[0]
 
