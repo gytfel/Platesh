@@ -375,9 +375,11 @@ class PlateshClient:
             if paid:
                 return await handler(event, data)
             if isinstance(event, BusinessConnection):
+                # Само подключение пропускаем — код бота его запомнит; предложение оплатить — следом.
+                result = await handler(event, data)
                 if event.is_enabled:
                     await remind_owner(bot, owner)
-                return await handler(event, data)  # само подключение пропускаем — код бота его запомнит
+                return result
             await remind_owner(bot, owner)
             return None  # без оплаты переписку не обрабатываем
 

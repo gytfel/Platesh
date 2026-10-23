@@ -320,6 +320,8 @@ async def test_business_connection_passes_and_offers_payment(paid_env):
     await dp.feed_update(own_bot, Update(update_id=next(_ids), business_connection=connection))
     assert seen == [("connection", OWNER)]  # код бота должен узнать о подключении
     assert len(offers_to(own_bot, OWNER)) == 1
+    order = [r for r in own_bot.session.requests if type(r).__name__ == "SendMessage" or r is None]
+    assert "после оплаты" in order[-1].text  # предложение — после ответа самого бота
     # Владелец уже известен по событию подключения — лишний запрос в Telegram не нужен.
     await dp.feed_update(own_bot, business_message("x", connection="bc2"))
     assert seen == [("connection", OWNER)]
