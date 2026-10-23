@@ -117,6 +117,27 @@ docker compose logs -f
 
 Бот со своим кодом тоже переносится на сервер. Скопируй его папку с компьютера командой `scp -r "D:\путь\к\боту" root@IP-АДРЕС:/opt/mybot`, установи его зависимости (`python3 -m venv /opt/mybot/.venv && /opt/mybot/.venv/bin/pip install aiogram`) и в `setup` укажи путь `/opt/mybot/bot.py`.
 
+## Перенос на другой сервер
+
+Переносятся настройки и базы: кто оплатил и до какого числа, а у архиватора — сохранённая переписка. Код скачивается заново.
+
+**На старом сервере:**
+```bash
+systemctl stop busnes-tg-perepiski platesh && systemctl disable busnes-tg-perepiski platesh
+cd /opt && tar czf /root/move.tgz --ignore-failed-read platesh/config.yaml platesh/.env platesh/data archiver/.env archiver/messages.db*
+read -p "IP нового сервера: " IP && scp /root/move.tgz root@$IP:/root/
+```
+
+**На новом сервере:**
+```bash
+apt-get update && apt-get install -y git
+git clone -b claude/platesh-paywall https://github.com/gytfel/Busnes-tg-perepiski.git /opt/archiver
+tar xzf /root/move.tgz -C /opt
+curl -fsSL https://raw.githubusercontent.com/gytfel/Platesh/refs/heads/claude/beautiful-johnson-i6jquz/install.sh | bash
+cd /opt/archiver && bash install.sh && bash connect_platesh.sh
+```
+На вопрос «config.yaml уже есть. Настроить заново?» нажми Enter: перенесённые настройки останутся.
+
 ## Настройка (`config.yaml`)
 
 Полный пример с комментариями — [`config.example.yaml`](config.example.yaml). Секреты лучше держать в `.env` и подставлять как `${ИМЯ}`. Запись `${ИМЯ:-}` значит, что переменная необязательна. Бот с пустым токеном пропускается, так что заготовки в конфиге не мешают.
