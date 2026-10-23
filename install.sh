@@ -27,6 +27,14 @@ python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' \
 if [ -d "$DIR/.git" ]; then
   say "Обновляю Platesh в $DIR..."
   git -C "$DIR" pull -q --ff-only origin "$BRANCH"
+elif [ -d "$DIR" ] && [ -n "$(ls -A "$DIR")" ]; then
+  # Папка уже есть — например, с перенесёнными с другого сервера config.yaml, .env и data/.
+  # Скачиваем код прямо в неё: файлы программы появятся, настройки и база останутся.
+  say "Скачиваю Platesh в $DIR (найденные там настройки и база сохранятся)..."
+  git -C "$DIR" init -q
+  git -C "$DIR" remote add origin "$REPO" 2>/dev/null || git -C "$DIR" remote set-url origin "$REPO"
+  git -C "$DIR" fetch -q --depth 1 origin "$BRANCH"
+  git -C "$DIR" checkout -q -f -B "$BRANCH" FETCH_HEAD
 else
   say "Скачиваю Platesh в $DIR..."
   git clone -q -b "$BRANCH" "$REPO" "$DIR"
