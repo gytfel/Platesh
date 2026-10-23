@@ -6,8 +6,10 @@
 
 from __future__ import annotations
 
+import errno
 import io
 import os
+import shutil
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -18,10 +20,18 @@ UPDATE_URL = os.environ.get(
     "https://github.com/gytfel/Platesh/archive/refs/heads/claude/beautiful-johnson-i6jquz.zip",
 )
 PROTECTED = {"config.yaml", ".env", "data", ".venv", "venv"}
+SPACE_MARGIN = 20 * 1024 * 1024  # запас места, чтобы не забить диск под ноль
+TMP_SUFFIX = ".platesh-new"
 
 
 class UpdateError(Exception):
     pass
+
+
+def no_space_message(path: Path) -> str:
+    drive = Path(path.resolve().anchor or "/")
+    return (f"на диске {drive} не хватает места. Освободи хотя бы 100 МБ "
+            f"(очисти Корзину, папку Загрузки, временные файлы) и запусти обновление снова")
 
 
 def update(target: Path, url: str = UPDATE_URL, say: Callable[[str], None] = print) -> int:
@@ -39,7 +49,8 @@ def update(target: Path, url: str = UPDATE_URL, say: Callable[[str], None] = pri
         raise UpdateError("неожиданный формат архива")
     root = names[0].split("/", 1)[0] + "/"
     target = target.resolve()
-    updated = 0
+
+    plan: list[tuple[Path, zipfile.ZipInfo]] = []
     for info in archive.infolist():
         if info.is_dir() or not info.filename.startswith(root):
             continue
@@ -49,10 +60,28 @@ def update(target: Path, url: str = UPDATE_URL, say: Callable[[str], None] = pri
         destination = (target / relative).resolve()
         if target not in destination.parents:
             continue  # путь вида ../ — мимо папки программы не пишем
+        plan.append((destination, info))
+
+    needed = sum(info.file_size for _, info in plan) + SPACE_MARGIN
+    if shutil.disk_usage(target).free < needed:
+        raise UpdateError(no_space_message(target))
+
+    updated = 0
+    for destination, info in plan:
         content = archive.read(info)
         if destination.is_file() and destination.read_bytes() == content:
             continue
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(content)
+        # Сначала пишем рядом и только потом подменяем: если запись оборвётся,
+        # старый файл останется целым и программа не сломается.
+        temporary = destination.with_name(destination.name + TMP_SUFFIX)
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary.write_bytes(content)
+            os.replace(temporary, destination)
+        except OSError as exc:
+            temporary.unlink(missing_ok=True)
+            if exc.errno == errno.ENOSPC:
+                raise UpdateError(no_space_message(target) + f". Обновлено файлов до ошибки: {updated}") from exc
+            raise UpdateError(f"не удалось записать {destination}: {exc}") from exc
         updated += 1
     return updated

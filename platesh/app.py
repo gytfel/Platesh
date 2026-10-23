@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import shutil
 import signal
 from contextlib import suppress
+from pathlib import Path
 
 from aiogram.exceptions import TelegramAPIError
 from aiohttp import web
@@ -61,6 +63,18 @@ async def check_chats(registry: BotRegistry, payments: PaymentService, notifier:
             )
 
 
+LOW_DISK_BYTES = 100 * 1024 * 1024
+
+
+def warn_low_disk(path: Path) -> None:
+    """База пишется на диск: если места нет, оплаты не сохранятся — предупреждаем заранее."""
+    path.mkdir(parents=True, exist_ok=True)
+    free = shutil.disk_usage(path).free
+    if free < LOW_DISK_BYTES:
+        log.warning("⚠️ На диске %s осталось %d МБ. Когда место кончится, Platesh не сможет сохранять оплаты — "
+                    "освободи место.", path.resolve().anchor or "/", free // (1024 * 1024))
+
+
 async def _wait_for_stop_signal() -> None:
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -71,6 +85,7 @@ async def _wait_for_stop_signal() -> None:
 
 
 async def run(cfg: Config) -> None:
+    warn_low_disk(cfg.database.parent)
     db = await Database.open(cfg.database)
     proxy = cfg.proxy_url
     if proxy:

@@ -48,3 +48,51 @@ def test_update_replaces_code_but_keeps_settings(tmp_path):
 def test_update_reports_download_errors(tmp_path):
     with pytest.raises(UpdateError, match="не удалось скачать"):
         update(tmp_path, (tmp_path / "missing.zip").as_uri(), say=lambda _: None)
+
+
+def test_not_enough_space_is_detected_before_writing(tmp_path, monkeypatch):
+    import shutil as shutil_module
+
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / "main.py").write_text("old")
+    url = make_zip(tmp_path / "u.zip", {"main.py": "new"})
+    monkeypatch.setattr("platesh.updater.shutil.disk_usage",
+                        lambda path: shutil_module._ntuple_diskusage(100, 100, 0))
+    with pytest.raises(UpdateError, match="не хватает места"):
+        update(app, url, say=lambda _: None)
+    assert (app / "main.py").read_text() == "old"
+
+
+def test_disk_full_during_write_keeps_old_files_intact(tmp_path, monkeypatch):
+    import errno
+    from pathlib import Path
+
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / "a.py").write_text("old a")
+    (app / "b.py").write_text("old b")
+    url = make_zip(tmp_path / "u.zip", {"a.py": "new a", "b.py": "new b"})
+    original = Path.write_bytes
+
+    def write_bytes(self, data):
+        if self.name == "b.py.platesh-new":
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return original(self, data)
+
+    monkeypatch.setattr(Path, "write_bytes", write_bytes)
+    with pytest.raises(UpdateError, match="не хватает места.*до ошибки: 1"):
+        update(app, url, say=lambda _: None)
+    assert (app / "a.py").read_text() == "new a"
+    assert (app / "b.py").read_text() == "old b"  # не обнулился
+    assert not list(app.glob("*.platesh-new"))
+
+
+def test_low_disk_warning(tmp_path, monkeypatch, caplog):
+    import shutil as shutil_module
+
+    from platesh import app
+
+    monkeypatch.setattr(app.shutil, "disk_usage", lambda path: shutil_module._ntuple_diskusage(10**9, 10**9, 5 * 1024 * 1024))
+    app.warn_low_disk(tmp_path / "data")
+    assert any("осталось 5 МБ" in r.getMessage() for r in caplog.records)
