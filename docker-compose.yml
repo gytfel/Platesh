@@ -1,0 +1,11 @@
+services:
+  platesh:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/app/data          # база данных
+      - ./files:/app/files:ro     # файлы для выдачи (deliver.file: files/...)
+    ports:
+      - "8080:8080"               # HTTP API и вебхук CryptoBot

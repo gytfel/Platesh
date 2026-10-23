@@ -1,0 +1,95 @@
+# =====================================================================
+#  Platesh — настройки. Скопируй в config.yaml и заполни.
+#  Секреты удобно держать в .env (см. .env.example) и подставлять как ${ИМЯ}.
+#  ${ИМЯ:-} — переменная необязательна (пустое значение, если не задана).
+# =====================================================================
+
+# Файл базы данных (счета, покупатели). Путь относительно этого файла.
+database: data/platesh.db
+
+# Твой Telegram ID (узнать: @userinfobot). Админы получают уведомления об оплатах
+# и команды /stats, /payments, /refund во всех ботах.
+# ВАЖНО: нажми /start в каждом боте, иначе бот не сможет тебе написать.
+admins: [123456789]
+
+# HTTP API для своих бэкендов/ботов и приём вебхуков CryptoBot.
+server:
+  enabled: true
+  host: 0.0.0.0
+  port: 8080
+  api_key: ${PLATESH_API_KEY:-}          # без ключа /api/* отключён
+  webhook_secret: ${PLATESH_WEBHOOK_SECRET:-}  # подпись уведомлений на notify_url
+
+# Куда слать уведомления об оплатах (POST JSON). Можно переопределить у каждого бота.
+# notify_url: https://example.com/platesh-webhook
+
+# CryptoBot (Crypto Pay API). Токен: @CryptoBot → Crypto Pay → Create App.
+# Для тестов: @CryptoTestnetBot и testnet: true.
+cryptobot:
+  token: ${CRYPTOBOT_TOKEN:-}
+  testnet: false
+  # Валюта цен price.crypto. Фиат (USD, EUR, RUB, ...) — покупатель платит любой
+  # монетой из accepted_assets по курсу. Или конкретная монета: USDT, TON, BTC...
+  currency: USD
+  accepted_assets: [USDT, TON, BTC, ETH, LTC, TRX, USDC]
+  expires_in: 3600        # сколько секунд счёт можно оплатить
+  poll_interval: 10       # как часто проверять оплату (сек). 0 — только вебхук
+
+# ---------------------------------------------------------------------
+#  Боты. Добавляй сколько угодно — все работают одновременно.
+#
+#  mode: managed  — Platesh сам запускает бота: витрина с товарами, кнопки оплаты,
+#                   выдача покупки. Код писать не нужно.
+#  mode: external — у бота свой код. Platesh не запускает его, а даёт API:
+#                   бот создаёт счета через HTTP и получает уведомления об оплате
+#                   (готовый клиент: client/platesh_client.py).
+# ---------------------------------------------------------------------
+bots:
+  - name: shop                     # короткое имя (латиницей), используется в API
+    token: ${SHOP_BOT_TOKEN}       # токен от @BotFather
+    mode: managed
+    payments: [stars, crypto]      # какие способы оплаты включены
+    welcome: "👋 Привет! Здесь можно купить доступ в закрытый канал и гайды."
+    support: "По вопросам оплаты пиши @your_support"
+    # admins: [987654321]          # дополнительные админы только этого бота
+    products:
+      - id: vip
+        title: VIP-канал на месяц
+        description: Доступ в закрытый канал с сигналами.
+        price:
+          stars: 500               # цена в Telegram Stars (целое число)
+          crypto: 9.99             # цена в cryptobot.currency (USD)
+        deliver:
+          text: "🎉 Спасибо! Добро пожаловать в VIP."
+          invite_chat_id: -1001234567890   # бот должен быть админом канала
+          invite_hours: 24                 # сколько живёт одноразовая ссылка
+
+      - id: guide
+        title: PDF-гайд
+        description: Подробный гайд в PDF.
+        price:
+          stars: 150               # только Stars — кнопки крипты не будет
+        deliver:
+          text: "📘 Держи гайд!"
+          file: files/guide.pdf    # путь к файлу, file_id или URL
+
+  - name: second_shop
+    token: ${SECOND_BOT_TOKEN:-}
+    payments: [crypto]
+    cryptobot:                     # можно задать свой CryptoBot/валюту для бота
+      currency: USDT
+    products:
+      - id: consult
+        title: Консультация
+        description: 30 минут созвона.
+        price:
+          crypto: 25
+        deliver: "✅ Оплачено! Напиши @your_nick, чтобы выбрать время."
+
+  - name: my_own_bot               # бот со своим кодом, Platesh только принимает оплату
+    token: ${MY_OWN_BOT_TOKEN:-}
+    mode: external
+    payments: [stars, crypto]
+    notify_url: https://example.com/payments/webhook
+    # texts:                       # любые тексты можно переопределить (см. platesh/texts.py)
+    #   paid: "Оплата прошла, доступ уже открыт!"
