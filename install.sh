@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Установка Platesh на VPS-сервер (Ubuntu 22.04+ / Debian 12+) одной командой:
 #
-#   curl -fsSL https://raw.githubusercontent.com/gytfel/Platesh/refs/heads/claude/beautiful-johnson-i6jquz/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/gytfel/Platesh/refs/heads/claude/beautiful-johnson-i6jquz/install.sh | bash
 #
+# (если зашёл не под root — добавь sudo:  ... | sudo bash)
 # Повторный запуск той же команды обновляет Platesh (настройки и база сохраняются).
 set -euo pipefail
 
