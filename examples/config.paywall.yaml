@@ -1,0 +1,48 @@
+# =====================================================================
+#  Platesh: пейволл для твоих ботов (без каналов).
+#  Скопируй в корень проекта как config.yaml:  cp examples/config.paywall.yaml config.yaml
+#  Токены и ключи впиши в .env (имена переменных — ниже, в ${...}).
+# =====================================================================
+
+database: data/platesh.db
+
+# Твой Telegram ID (@userinfobot). Получаешь уведомления об оплатах и команды /stats, /grant...
+admins: [123456789]
+
+server:
+  host: 127.0.0.1                 # боты на том же компьютере/сервере, что и Platesh (в Docker — 0.0.0.0)
+  port: 8080
+  allowed_ips: [127.0.0.1]        # к API можно только с этого же компьютера
+
+cryptobot:
+  token: ${CRYPTOBOT_TOKEN:-}     # пусто — оплата только в Stars
+  currency: USD
+  accepted_assets: [USDT, TON]
+  poll_interval: 10
+
+bots:
+  # ---- первый бот -----------------------------------------------------
+  - name: bot1                    # это имя пишешь в коде бота: PlateshClient(..., bot="bot1")
+    token: ${BOT1_TOKEN}
+    mode: external                # у бота свой код, Platesh его не запускает
+    api_key: ${BOT1_API_KEY}      # ключ этого бота (python -m platesh genkey)
+    payments: [stars, crypto]
+    products:
+      - id: premium               # это id пишешь в install_paywall(dp, products=["premium"])
+        title: Доступ на месяц
+        price:
+          stars: 200
+          crypto: 3.99            # в USD, покупатель платит USDT или TON
+        days: 30                  # через 30 дней бот снова закроется, если не продлить
+
+  # ---- второй бот (удали блок, если не нужен) ----------------------------
+  - name: bot2
+    token: ${BOT2_TOKEN:-}        # пустой токен — бот пропускается
+    mode: external
+    api_key: ${BOT2_API_KEY:-}
+    payments: [stars]
+    products:
+      - id: premium
+        title: Доступ навсегда
+        price:
+          stars: 500              # без days — навсегда

@@ -183,6 +183,8 @@ bots:
 
 Platesh не запускает такого бота, поэтому конфликтов с твоим кодом нет. Бот создаёт счета через API, а Platesh отслеживает оплату и сообщает о ней.
 
+Готовые примеры: конфиг для пейволла [`examples/config.paywall.yaml`](examples/config.paywall.yaml) и бот с пейволлом [`examples/paywall_bot.py`](examples/paywall_bot.py).
+
 1. В `config.yaml` укажи у бота `mode: external`, `api_key` (ключ только для этого бота, создать: `python -m platesh genkey`) и товары.
 2. Скопируй [`client/platesh_client.py`](client/platesh_client.py) в проект бота.
 3. Подключи (пример для aiogram 3):

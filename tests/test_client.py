@@ -189,3 +189,29 @@ async def test_client_guard_kicks_non_payers(paid_env):
     ))
     await dp.feed_update(own_bot, update)
     assert own_bot.session.calls(BanChatMember)[0].user_id == 999
+
+
+async def test_example_paywall_bot(paid_env):
+    """examples/paywall_bot.py: до оплаты — кнопки, после — обычные ответы, админ проходит всегда."""
+    import importlib.util
+
+    env, client, own_bot, _, _ = paid_env
+    path = Path(__file__).parent.parent / "examples" / "paywall_bot.py"
+    spec = importlib.util.spec_from_file_location("paywall_bot", path)
+    example = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(example)
+    dp = example.build_dispatcher(client, admins=[42])
+
+    def answers():
+        return [m.text for m in own_bot.session.calls(SendMessage)]
+
+    await dp.feed_update(own_bot, text_update("/start"))
+    assert "после оплаты" in answers()[-1]
+
+    await dp.feed_update(own_bot, text_update("/start", uid=42))
+    assert answers()[-1].startswith("Привет! Подписка активна")
+
+    await env.db.save_access(Access("ext", BUYER_ID, "premium", expires_at=int(time.time()) + 3600))
+    client.forget(BUYER_ID)
+    await dp.feed_update(own_bot, text_update("эхо"))
+    assert answers()[-1] == "Ты написал: эхо"
