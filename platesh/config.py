@@ -34,6 +34,13 @@ FIAT_CURRENCIES = frozenset(
 )
 
 _ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+# Обрывки букв: Backspace в терминале сервера стирает у русской буквы один байт из двух, остаток
+# попадает в config.yaml как "\uDCD1" — и Telegram отклоняет такой текст (кнопки, счета).
+_BROKEN_CHARS_RE = re.compile("[\ud800-\udfff]")
+
+
+def clean_text(value: str) -> str:
+    return _BROKEN_CHARS_RE.sub("", value)
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 
 
@@ -214,6 +221,10 @@ def _expand_env(value: Any, where: str) -> Any:
         return [_expand_env(v, f"{where}[{i}]") for i, v in enumerate(value)]
     if not isinstance(value, str):
         return value
+    cleaned = clean_text(value)
+    if cleaned != value:
+        log.warning("%s: убраны битые символы (буква, стёртая в терминале не до конца). Проверь текст: %s", where, cleaned)
+        value = cleaned
 
     def repl(match: re.Match[str]) -> str:
         name, default = match.group(1), match.group(2)

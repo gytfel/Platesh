@@ -263,3 +263,12 @@ def test_check_bot_token_without_aiogram(unused_tcp_port):
     assert status == "invalid" and "Unauthorized" in reason
     assert setup_wizard.check_bot_token("плохой", api=api)[0] == "invalid"
     assert setup_wizard.check_bot_token("123456:" + "A" * 35, api="http://127.0.0.1:1")[0] == "offline"
+
+
+def test_broken_letters_in_answers_are_removed(tmp_path):
+    broken = ("Преми".encode() + "у".encode()[:1] + "м".encode()).decode("utf-8", "surrogateescape")
+    w, _ = wizard(tmp_path, ["7", "", "111:AAA", "", broken, "300", "30", "", "", "н"])
+    w.run()
+    [bot] = load_config(tmp_path / "config.yaml").bots
+    assert bot.products["premium"].title == "Премим"
+    assert "\\u" not in (tmp_path / "config.yaml").read_text(encoding="utf-8")

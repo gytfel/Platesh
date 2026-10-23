@@ -166,3 +166,13 @@ def test_bot_env_lines(tmp_path):
     raw["bots"][1]["api_key"] = None
     with pytest.raises(LookupError, match="api_key"):
         bot_env_lines(parse_config(raw, tmp_path), raw["bots"][1]["token"])
+
+
+def test_broken_letters_are_removed(tmp_path, caplog):
+    """Буква, стёртая в терминале не до конца, лежит в config.yaml как "\\uDCD1" — Telegram такой текст не примет."""
+    (tmp_path / "config.yaml").write_text(
+        'bots:\n  - name: a\n    token: "1:x"\n    products:\n      - id: p\n        title: "Преми\\uDCD1м"\n'
+        '        price: {stars: 10}\n', encoding="utf-8")
+    cfg = load_config(tmp_path / "config.yaml")
+    assert cfg.bots[0].products["p"].title == "Премим"
+    assert "битые символы" in caplog.text and "bots[0].products[0].title" in caplog.text

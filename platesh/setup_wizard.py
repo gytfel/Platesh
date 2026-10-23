@@ -20,6 +20,7 @@ from typing import Callable
 
 import yaml
 
+from .config import clean_text
 from .net import mask_proxy, normalize_proxy, resolve_proxy
 
 CLIENT_FILE = Path(__file__).resolve().parent.parent / "client" / "platesh_client.py"
@@ -159,6 +160,20 @@ class BotSetup:
         return f"@{self.username} ({self.name})" if self.username else self.name
 
 
+def utf8_erase(stream=None) -> None:
+    """Чтобы Backspace в терминале Linux стирал русскую букву целиком, а не половину её байтов."""
+    try:
+        import termios
+
+        fd = (stream or sys.stdin).fileno()
+        attrs = termios.tcgetattr(fd)
+        if not attrs[0] & termios.IUTF8:
+            attrs[0] |= termios.IUTF8
+            termios.tcsetattr(fd, termios.TCSANOW, attrs)
+    except Exception:  # Windows, не терминал — там и так нормально
+        pass
+
+
 class Wizard:
     def __init__(
         self,
@@ -184,7 +199,7 @@ class Wizard:
     def ask(self, prompt: str, default: str | None = None) -> str:
         suffix = f" [{default}]" if default not in (None, "") else ""
         try:
-            answer = self._ask(f"{prompt}{suffix}: ").strip()
+            answer = clean_text(self._ask(f"{prompt}{suffix}: ")).strip()
         except (EOFError, KeyboardInterrupt):
             raise Aborted from None
         return answer if answer else (default or "")
@@ -466,6 +481,8 @@ class Wizard:
 
         offer_start=False — не спрашивать про запуск (установка на сервер сама включит службу).
         """
+        if self._ask is input:
+            utf8_erase()
         self.say("=========== Настройка Platesh ===========")
         self.say("Отвечай на вопросы. Enter — значение в [скобках]. Прервать — Ctrl+C.")
         try:
