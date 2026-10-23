@@ -165,6 +165,7 @@ class Wizard:
         self.check_bot = check_bot
         self.check_crypto = check_crypto
         self.proxy: str | None = None  # что записать в config.yaml (None — auto)
+        self.previous: dict = {}  # ответы из прошлой настройки — Enter их оставляет
         self.offline_ok = False  # пользователь решил не проверять токены без связи
 
     # ------------------------------------------------------------------ ввод
@@ -176,6 +177,31 @@ class Wizard:
         except (EOFError, KeyboardInterrupt):
             raise Aborted from None
         return answer if answer else (default or "")
+
+    def ask_secret(self, prompt: str, current: str | None) -> str:
+        """Токен: если он уже был, Enter оставляет его (в подсказке видны только края)."""
+        if not current:
+            return self.ask(prompt)
+        shown = f"{current[:6]}…{current[-4:]}" if len(current) > 12 else "…"
+        answer = self.ask(f"{prompt} [Enter — оставить {shown}]")
+        return answer or current
+
+    def load_previous(self) -> dict:
+        """Ответы из существующего config.yaml/.env, чтобы при повторной настройке не вводить их снова."""
+        try:
+            from .config import load_config
+
+            cfg = load_config(self.config_path)
+        except Exception:
+            return {}
+        crypto = next((b.crypto for b in cfg.bots if b.crypto.token), None)
+        return {
+            "admin": cfg.admins[0] if cfg.admins else None,
+            "crypto_token": crypto.token if crypto else None,
+            "currency": crypto.currency if crypto else "USD",
+            "bot_tokens": [b.token for b in cfg.bots],
+            "proxy": cfg.proxy,
+        }
 
     def ask_yes(self, prompt: str, default: bool = True) -> bool:
         while True:
@@ -214,8 +240,14 @@ class Wizard:
 
     def ask_crypto(self) -> tuple[str | None, bool, str]:
         self.say("\nCryptoBot — оплата криптой (USDT, TON...). Токен: @CryptoBot → Crypto Pay → Create App.")
+        previous = self.previous.get("crypto_token")
         while True:
-            token = self.ask("Токен CryptoBot (Enter — без крипты, только Stars)")
+            if previous:
+                token = self.ask_secret("Токен CryptoBot («-» — без крипты)", previous)
+                if token == "-":
+                    return None, False, "USD"
+            else:
+                token = self.ask("Токен CryptoBot (Enter — без крипты, только Stars)")
             if not token:
                 return None, False, "USD"
             self.say("  Проверяю...")
@@ -227,7 +259,8 @@ class Wizard:
                 self.say(f"  ⚠️ Нет связи с CryptoBot ({info}). Сохраню как есть — проверишь потом через check.")
                 break
             self.say(f"  ❌ {info}. Попробуй ещё раз.")
-        currency = self.ask("Валюта цен для крипты (USD, EUR, RUB или монета USDT, TON)", "USD").upper()
+        currency = self.ask("Валюта цен для крипты (USD, EUR, RUB или монета USDT, TON)",
+                            self.previous.get("currency") or "USD").upper()
         return token, testnet, currency
 
     def handle_offline(self, token: str, error: str) -> tuple[str, str]:
@@ -253,8 +286,9 @@ class Wizard:
 
     def ask_bot(self, index: int, used_names: set[str], crypto: bool, currency: str) -> BotSetup:
         self.say(f"\n--- Бот №{index} ---")
+        old_tokens = self.previous.get("bot_tokens") or []
         while True:
-            token = self.ask("Токен бота (от @BotFather)")
+            token = self.ask_secret("Токен бота (от @BotFather)", old_tokens[index - 1] if index <= len(old_tokens) else None)
             if not token:
                 self.say("  Токен обязателен.")
                 continue
@@ -422,12 +456,15 @@ class Wizard:
         self.say("Отвечай на вопросы. Enter — значение в [скобках]. Прервать — Ctrl+C.")
         try:
             name = self.config_path.name
-            if self.config_path.exists() and not self.ask_yes(
-                f"\n{name} уже есть. Настроить заново? (старый сохранится как {name}.bak)", False
-            ):
-                return self.ask_yes("Запустить Platesh с текущими настройками?")
+            if self.config_path.exists():
+                if not self.ask_yes(f"\n{name} уже есть. Настроить заново? (старый сохранится как {name}.bak)", False):
+                    return self.ask_yes("Запустить Platesh с текущими настройками?")
+                self.previous = self.load_previous()
+                self.proxy = self.previous.get("proxy")
+                if self.previous:
+                    self.say("Прошлые ответы подставлены в [скобках] — Enter оставляет их.")
             self.say("\nТвой Telegram ID нужен для уведомлений об оплатах. Узнать: напиши @userinfobot.")
-            admin_id = self.ask_int("Твой Telegram ID", minimum=1)
+            admin_id = self.ask_int("Твой Telegram ID", self.previous.get("admin"), minimum=1)
             crypto = self.ask_crypto()
             bots: list[BotSetup] = []
             used: set[str] = set()

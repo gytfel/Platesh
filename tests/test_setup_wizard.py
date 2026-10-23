@@ -205,3 +205,23 @@ def test_paywall_without_code_path_warns(tmp_path):
     w, term = wizard(tmp_path, ["7", "", "111:AAA", "д", "", "100", "", "", "н", "н"])
     w.run()
     assert "бот не будет отвечать" in term.text
+
+
+def test_reconfigure_keeps_previous_tokens_on_enter(tmp_path):
+    first, _ = wizard(tmp_path, ["555", "12345:crypto", "EUR", "111:AAA", "д", "", "100", "", "", "", "", "н"])
+    first.run()
+    # Второй раз: перенастроить, везде Enter — только режим меняем на магазин.
+    second, term = wizard(tmp_path, ["д", "", "", "", "", "", "", "100", "", "", "", "", "н"])
+    second.run()
+    cfg = load_config(tmp_path / "config.yaml")
+    [bot] = cfg.bots
+    assert cfg.admins == (555,) and bot.token == "111:AAA" and bot.managed
+    assert bot.crypto.token == "12345:crypto" and bot.crypto.currency == "EUR"
+    assert "оставить 111:AA…" not in term.text  # короткий токен целиком не показываем
+    assert "Прошлые ответы подставлены" in term.text
+
+
+def test_reconfigure_can_drop_crypto(tmp_path):
+    wizard(tmp_path, ["555", "12345:crypto", "", "111:AAA", "", "", "100", "", "", "", "", "н"])[0].run()
+    wizard(tmp_path, ["д", "", "-", "", "", "", "100", "", "", "", "н"])[0].run()
+    assert not load_config(tmp_path / "config.yaml").bots[0].crypto.enabled
