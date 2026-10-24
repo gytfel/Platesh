@@ -39,6 +39,8 @@ else
   say "Скачиваю Platesh в $DIR..."
   git clone -q -b "$BRANCH" "$REPO" "$DIR"
 fi
+# Чтобы обычный «git pull» в этой папке знал, откуда обновляться (при переносе код скачан без этой связи).
+git -C "$DIR" branch -q --set-upstream-to="origin/$BRANCH" "$BRANCH" 2>/dev/null || true
 cd "$DIR"
 chmod +x run.sh install.sh
 
