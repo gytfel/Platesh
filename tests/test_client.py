@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 from aiogram import Dispatcher
-from aiogram.methods import AnswerPreCheckoutQuery, BanChatMember, SendInvoice, SendMessage
+from aiogram.methods import AnswerPreCheckoutQuery, BanChatMember, EditMessageText, SendInvoice, SendMessage
 from aiogram.types import (
     CallbackQuery,
     Chat,
@@ -30,7 +30,7 @@ from platesh.web import create_app
 from .conftest import BUYER_ID, CHANNEL_ID, build_env, make_bot, make_raw_config
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "client"))
-from platesh_client import PlateshClient, PlateshError, verify_webhook  # noqa: E402
+from platesh_client import PlateshClient, PlateshError, _days, _plan_names, verify_webhook  # noqa: E402
 
 
 @pytest.fixture
@@ -126,27 +126,43 @@ def text_update(text, uid=BUYER_ID, chat_type="private"):
     ))
 
 
+def callback_update(data, uid=BUYER_ID):
+    return Update(update_id=next(_ids), callback_query=CallbackQuery(
+        id="cb", from_user=User(id=uid, is_bot=False, first_name="u"), chat_instance="c", data=data,
+        message=Message(message_id=1, date=datetime.datetime.now(), chat=Chat(id=uid, type="private"), text="x"),
+    ))
+
+
 async def test_paywall_blocks_until_paid(paid_env):
     env, client, own_bot, dp, handled = paid_env
     await dp.feed_update(own_bot, text_update("привет"))
     assert handled == []
     offer = own_bot.session.calls(SendMessage)[-1]
-    assert "после оплаты" in offer.text
-    buttons = [r[0].callback_data for r in offer.reply_markup.inline_keyboard]
-    assert buttons == ["platesh:pay:premium:stars", "platesh:pay:premium:crypto"]
-    assert "/ 30 дн." in offer.reply_markup.inline_keyboard[0][0].text
+    assert "Бот ограничен" in offer.text and "нужна подписка" in offer.text
+    # Шаг 1: выбор подписки — срок и цены всеми способами.
+    [[plan]] = offer.reply_markup.inline_keyboard
+    assert plan.callback_data == "platesh:plan:premium" and plan.text == "📅 30 дней — 50 ⭐ · 3 USD"
+
+    # Шаг 2: то же сообщение меняется на выбор способа оплаты.
+    await dp.feed_update(own_bot, callback_update("platesh:plan:premium"))
+    step2 = own_bot.session.calls(EditMessageText)[-1]
+    assert "Подписка на 30 дней" in step2.text and "способ оплаты" in step2.text and step2.parse_mode == "HTML"
+    rows = step2.reply_markup.inline_keyboard
+    assert [r[0].callback_data for r in rows] == ["platesh:pay:premium:stars", "platesh:pay:premium:crypto", "platesh:plans"]
+    assert [r[0].text for r in rows[:2]] == ["⭐ Telegram Stars — 50 ⭐", "💎 CryptoBot — 3 USD"]
+
+    # «Назад» — снова список подписок.
+    await dp.feed_update(own_bot, callback_update("platesh:plans"))
+    back = own_bot.session.calls(EditMessageText)[-1]
+    assert back.text == offer.text and back.reply_markup.inline_keyboard[0][0].callback_data == "platesh:plan:premium"
+    assert handled == []
 
     await dp.feed_update(own_bot, text_update("/paysupport"))  # Telegram требует отвечать на него всегда
     await dp.feed_update(own_bot, text_update("в группе", chat_type="group"))
     assert handled == ["/paysupport", "в группе"]
 
-    # Нажал «Оплатить Stars» — Platesh отправил счёт от имени бота.
-    cb = Update(update_id=next(_ids), callback_query=CallbackQuery(
-        id="cb", from_user=User(id=BUYER_ID, is_bot=False, first_name="u"), chat_instance="c",
-        data="platesh:pay:premium:stars",
-        message=Message(message_id=1, date=datetime.datetime.now(), chat=Chat(id=BUYER_ID, type="private"), text="x"),
-    ))
-    await dp.feed_update(own_bot, cb)
+    # Нажал «Telegram Stars» — Platesh отправил счёт от имени бота.
+    await dp.feed_update(own_bot, callback_update("platesh:pay:premium:stars"))
     invoice = env.session("ext").calls(SendInvoice)[-1]
     assert invoice.chat_id == BUYER_ID and invoice.prices[0].amount == 50
 
@@ -155,6 +171,27 @@ async def test_paywall_blocks_until_paid(paid_env):
     client.forget(BUYER_ID)
     await dp.feed_update(own_bot, text_update("теперь можно?"))
     assert handled[-1] == "теперь можно?"
+
+
+async def test_renew_button_opens_payment_methods(paid_env):
+    """«Продлить» из напоминания Platesh — сразу выбор способа оплаты новым сообщением."""
+    env, client, own_bot, dp, handled = paid_env
+    await dp.feed_update(own_bot, callback_update("platesh:buy:premium"))
+    sent = own_bot.session.calls(SendMessage)[-1]
+    assert sent.chat_id == BUYER_ID and "Подписка на 30 дней" in sent.text
+    assert [r[0].callback_data for r in sent.reply_markup.inline_keyboard][:2] == [
+        "platesh:pay:premium:stars", "platesh:pay:premium:crypto"]
+    assert own_bot.session.calls(EditMessageText) == []
+
+
+def test_plan_names():
+    assert [_days(n) for n in (1, 3, 5, 11, 21, 22, 30, 365)] == [
+        "1 день", "3 дня", "5 дней", "11 дней", "21 день", "22 дня", "30 дней", "365 дней"]
+    month, forever = {"id": "m", "title": "Месяц", "days": 30}, {"id": "f", "title": "Навсегда", "days": None}
+    assert _plan_names(month, [month, forever]) == ("30 дней", "Подписка на 30 дней")
+    assert _plan_names(forever, [month, forever]) == ("Навсегда", "Доступ навсегда")
+    vip = {"id": "v", "title": "VIP", "days": 30}  # тот же срок — различаем по названию
+    assert _plan_names(vip, [month, vip]) == ("VIP", "VIP — 30 дней")
 
 
 async def test_paywall_closes_after_expiry(paid_env):
@@ -206,7 +243,7 @@ async def test_example_paywall_bot(paid_env):
         return [m.text for m in own_bot.session.calls(SendMessage)]
 
     await dp.feed_update(own_bot, text_update("/start"))
-    assert "после оплаты" in answers()[-1]
+    assert "нужна подписка" in answers()[-1]
 
     await dp.feed_update(own_bot, text_update("/start", uid=42))
     assert answers()[-1].startswith("Привет! Подписка активна")
@@ -301,7 +338,7 @@ async def test_business_archiving_needs_owner_payment(paid_env):
     await dp.feed_update(own_bot, deleted)
     assert seen == []  # без оплаты переписка боту не передаётся
     offers = offers_to(own_bot, OWNER)
-    assert len(offers) == 1 and "сохранять переписку начнёт только после оплаты" in offers[0]  # без спама
+    assert len(offers) == 1 and "сохранять переписку начнёт только после оформления подписки" in offers[0]  # без спама
     assert offers_to(own_bot, CUSTOMER) == []  # клиенту владельца ничего не пишем
 
     await env.db.save_access(Access("ext", OWNER, "premium", expires_at=int(time.time()) + 3600))
@@ -321,7 +358,7 @@ async def test_business_connection_passes_and_offers_payment(paid_env):
     assert seen == [("connection", OWNER)]  # код бота должен узнать о подключении
     assert len(offers_to(own_bot, OWNER)) == 1
     order = [r for r in own_bot.session.requests if type(r).__name__ == "SendMessage" or r is None]
-    assert "после оплаты" in order[-1].text  # предложение — после ответа самого бота
+    assert "после оформления подписки" in order[-1].text  # предложение — после ответа самого бота
     # Владелец уже известен по событию подключения — лишний запрос в Telegram не нужен.
     await dp.feed_update(own_bot, business_message("x", connection="bc2"))
     assert seen == [("connection", OWNER)]

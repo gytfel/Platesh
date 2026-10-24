@@ -256,7 +256,9 @@ platesh = PlateshClient.from_env()
 dp.include_router(platesh.router())
 
 # Пейволл: в личке бот отвечает только тем, у кого оплачен товар premium.
-# Остальным показывает кнопки оплаты. /paysupport и /terms работают всегда.
+# Остальным — «🔒 Бот ограничен» с кнопками подписок («📅 30 дней — 350 ⭐ · 4 TON»), по нажатию
+# в том же сообщении — выбор способа оплаты (Telegram Stars / CryptoBot) и «Назад».
+# /paysupport и /terms работают всегда. Тексты свои: text=..., business_text=..., method_text=...
 platesh.install_paywall(dp, products=["premium"])
 ```
 

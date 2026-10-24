@@ -34,6 +34,7 @@ import logging
 import os
 import time
 from contextlib import suppress
+from html import escape
 from typing import Any, Awaitable, Callable, Iterable
 
 import aiohttp
@@ -45,9 +46,11 @@ CALLBACK_PREFIX = "platesh:"
 ACCESS_TTL = 60  # сколько секунд помнить «доступ есть»
 NO_ACCESS_TTL = 5  # и «доступа нет» (коротко, чтобы оплата криптой подхватывалась быстро)
 
-PAYWALL_TEXT = "🔒 Этот бот доступен после оплаты. Выбери вариант:"
-BUSINESS_TEXT = ("🔒 Бот подключён к твоему аккаунту, но сохранять переписку начнёт только после оплаты. "
-                 "Выбери вариант:")
+PAYWALL_TEXT = "🔒 Бот ограничен: нужна подписка. Выбери подписку:"
+BUSINESS_TEXT = ("🔒 Бот подключён к твоему аккаунту, но сохранять переписку начнёт только после оформления подписки. "
+                 "Выбери подписку:")
+METHOD_TEXT = "Выбери способ оплаты:"
+BACK_TEXT = "‹ Назад"
 BUSINESS_REMIND_EVERY = 6 * 3600  # напоминать владельцу аккаунта не чаще раза в 6 часов
 UNAVAILABLE_TEXT = "Сервис оплаты временно недоступен, попробуй через минуту."
 
@@ -68,6 +71,10 @@ class PlateshClient:
         self._bot_info: dict[str, Any] | None = None
         self._business_owners: dict[str, int] = {}  # business_connection_id -> владелец аккаунта
         self._business_reminded: dict[int, float] = {}
+        # Что показывать на кнопках «Назад»/«Продлить» — задаёт paywall().
+        self._offer_products: list[str] | None = None
+        self._offer_text = PAYWALL_TEXT
+        self._method_text = METHOD_TEXT
 
     @classmethod
     def from_env(cls, **kwargs: Any) -> PlateshClient:
@@ -196,26 +203,39 @@ class PlateshClient:
 
     # ------------------------------------------------------------------ кнопки оплаты
 
-    async def offer_markup(self, products: Iterable[str] | None = None):
-        """Кнопки «⭐ Товар — 100 Stars» / «💎 Товар — 5 USD» для выбранных (или всех) товаров."""
-        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-
+    async def _offered(self, products: Iterable[str] | None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Товары, которые можно купить хотя бы одним включённым способом."""
         info = await self.bot_info()
         wanted = set(products) if products else None
-        rows = []
-        for p in info["products"]:
-            if wanted is not None and p["id"] not in wanted:
-                continue
-            period = f" / {p['days']} дн." if p.get("days") else ""
-            if p.get("price_stars") is not None and "stars" in info["payments"]:
-                rows.append([InlineKeyboardButton(
-                    text=f"⭐ {p['title']} — {p['price_stars']} Stars{period}",
-                    callback_data=f"{CALLBACK_PREFIX}pay:{p['id']}:stars")])
-            if p.get("price_crypto") is not None and "crypto" in info["payments"]:
-                rows.append([InlineKeyboardButton(
-                    text=f"💎 {p['title']} — {p['price_crypto']} {info['crypto_currency']}{period}",
-                    callback_data=f"{CALLBACK_PREFIX}pay:{p['id']}:crypto")])
+        offered = [p for p in info["products"]
+                   if (wanted is None or p["id"] in wanted) and _methods(info, p)]
+        return info, offered
+
+    async def offer_markup(self, products: Iterable[str] | None = None):
+        """Шаг 1 — кнопки подписок «📅 30 дней — 350 ⭐ · 4 TON». Способ оплаты выбирается следующим шагом."""
+        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+        info, offered = await self._offered(products)
+        rows = [[InlineKeyboardButton(
+            text=f"📅 {_plan_names(p, offered)[0]} — {' · '.join(amount for _, _, amount in _methods(info, p))}",
+            callback_data=f"{CALLBACK_PREFIX}plan:{p['id']}")] for p in offered]
         return InlineKeyboardMarkup(inline_keyboard=rows)
+
+    async def method_offer(self, product_id: str, *, back: bool = True) -> tuple[str, Any] | None:
+        """Шаг 2 — текст и кнопки «⭐ Telegram Stars — 350 ⭐» / «💎 CryptoBot — 4 TON» для одной подписки."""
+        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+        info, offered = await self._offered(None)
+        product = next((p for p in offered if p["id"] == product_id), None)
+        if product is None:
+            return None
+        rows = [[InlineKeyboardButton(text=f"{label} — {amount}",
+                                      callback_data=f"{CALLBACK_PREFIX}pay:{product_id}:{method}")]
+                for method, label, amount in _methods(info, product)]
+        if back:
+            rows.append([InlineKeyboardButton(text=BACK_TEXT, callback_data=f"{CALLBACK_PREFIX}plans")])
+        text = f"📅 <b>{escape(_plan_names(product, offered)[1])}</b>\n\n{self._method_text}"
+        return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
     # ------------------------------------------------------------------ aiogram
 
@@ -264,13 +284,48 @@ class PlateshClient:
                     continue
             raise PlateshError(f"Platesh недоступен, оплата {sp.telegram_payment_charge_id} не учтена")
 
+        async def show(callback: CallbackQuery, text: str, markup: Any, parse_mode: str | None, *, edit: bool) -> None:
+            """Меняем то же сообщение (меньше мусора в чате); не вышло — присылаем новое."""
+            await callback.answer()
+            if edit and isinstance(callback.message, Message):
+                try:
+                    await callback.message.edit_text(text, reply_markup=markup, **_parse_mode(parse_mode))
+                    return
+                except TelegramBadRequest as exc:
+                    if "not modified" in str(exc):
+                        return
+            await callback.bot.send_message(callback.from_user.id, text, reply_markup=markup, **_parse_mode(parse_mode))
+
+        async def show_methods(callback: CallbackQuery, *, edit: bool) -> None:
+            product_id = callback.data.split(":", 2)[2]
+            try:
+                offer = await self.method_offer(product_id, back=True)
+            except (PlateshError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                log.warning("Platesh недоступен: %s", exc)
+                await callback.answer(UNAVAILABLE_TEXT, show_alert=True)
+                return
+            if offer is None:
+                await callback.answer("Эта подписка больше не продаётся", show_alert=True)
+                return
+            await show(callback, offer[0], offer[1], "HTML", edit=edit)
+
+        @router.callback_query(F.data.startswith(f"{CALLBACK_PREFIX}plan:"))
+        async def on_plan(callback: CallbackQuery) -> None:
+            await show_methods(callback, edit=True)
+
         @router.callback_query(F.data.startswith(f"{CALLBACK_PREFIX}buy:"))
         async def on_buy(callback: CallbackQuery) -> None:
-            product_id = callback.data.split(":", 2)[2]
-            await callback.answer()
-            await callback.bot.send_message(
-                callback.from_user.id, PAYWALL_TEXT, reply_markup=await self.offer_markup([product_id])
-            )
+            # «Продлить» в напоминании Platesh: сразу выбор способа оплаты, новым сообщением.
+            await show_methods(callback, edit=False)
+
+        @router.callback_query(F.data == f"{CALLBACK_PREFIX}plans")
+        async def on_plans(callback: CallbackQuery) -> None:
+            try:
+                markup = await self.offer_markup(self._offer_products)
+            except (PlateshError, aiohttp.ClientError, asyncio.TimeoutError):
+                await callback.answer(UNAVAILABLE_TEXT, show_alert=True)
+                return
+            await show(callback, self._offer_text, markup, None, edit=True)
 
         @router.callback_query(F.data.startswith(f"{CALLBACK_PREFIX}pay:"))
         async def on_pay(callback: CallbackQuery) -> None:
@@ -338,7 +393,8 @@ class PlateshClient:
         return self._business_owners[connection_id]
 
     def paywall(self, products: Iterable[str] | None = None, *, allow_commands: Iterable[str] = ("paysupport", "terms"),
-                exempt_users: Iterable[int] = (), text: str = PAYWALL_TEXT, business_text: str = BUSINESS_TEXT):
+                exempt_users: Iterable[int] = (), text: str = PAYWALL_TEXT, business_text: str = BUSINESS_TEXT,
+                method_text: str = METHOD_TEXT):
         """Middleware aiogram: бот работает только для тех, у кого оплачен доступ.
 
         - сообщения и кнопки в личке: без оплаты — предложение оплатить;
@@ -347,6 +403,7 @@ class PlateshClient:
           получает предложение оплатить (не чаще раза в 6 часов).
 
         products — какие товары открывают бота (None — любой оплаченный товар).
+        text — сообщение с кнопками подписок; method_text — подпись к выбору способа оплаты.
         """
         from aiogram import BaseMiddleware
         from aiogram.types import BusinessConnection, BusinessMessagesDeleted, CallbackQuery, Message
@@ -355,6 +412,7 @@ class PlateshClient:
         products = list(products) if products else None
         allowed = {f"/{c.lstrip('/')}" for c in allow_commands}
         exempt = set(exempt_users) | self.admins
+        self._offer_products, self._offer_text, self._method_text = products, text, method_text
 
         async def remind_owner(bot: Any, owner_id: int) -> None:
             last = client._business_reminded.get(owner_id)
@@ -428,6 +486,38 @@ class PlateshClient:
                          "edited_business_message", "deleted_business_messages"):
             if hasattr(dp, observer):  # Telegram Business есть в aiogram 3.7+
                 getattr(dp, observer).outer_middleware(middleware)
+
+
+def _methods(info: dict[str, Any], product: dict[str, Any]) -> list[tuple[str, str, str]]:
+    """Способы оплаты товара: (method, подпись, цена)."""
+    methods = []
+    if product.get("price_stars") is not None and "stars" in info["payments"]:
+        methods.append(("stars", "⭐ Telegram Stars", f"{product['price_stars']} ⭐"))
+    if product.get("price_crypto") is not None and "crypto" in info["payments"]:
+        methods.append(("crypto", "💎 CryptoBot", f"{product['price_crypto']} {info['crypto_currency']}"))
+    return methods
+
+
+def _days(days: int) -> str:
+    if days % 10 == 1 and days % 100 != 11:
+        return f"{days} день"
+    if 2 <= days % 10 <= 4 and not 12 <= days % 100 <= 14:
+        return f"{days} дня"
+    return f"{days} дней"
+
+
+def _plan_names(product: dict[str, Any], offered: list[dict[str, Any]]) -> tuple[str, str]:
+    """(коротко для кнопки, полностью для заголовка). Подписки различаем по сроку, при одинаковом сроке — по названию."""
+    days = product.get("days")
+    if sum(1 for p in offered if p.get("days") == days) > 1:
+        return product["title"], f"{product['title']} — {_days(days)}" if days else product["title"]
+    if days:
+        return _days(days), f"Подписка на {_days(days)}"
+    return "Навсегда", "Доступ навсегда"
+
+
+def _parse_mode(parse_mode: str | None) -> dict[str, Any]:
+    return {"parse_mode": parse_mode} if parse_mode else {}
 
 
 def verify_webhook(body: bytes, signature: str | None, secret: str) -> bool:
