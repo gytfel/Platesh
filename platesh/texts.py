@@ -21,7 +21,10 @@ DEFAULT_TEXTS: dict[str, str] = {
     ),
     "crypto_pay_in": "\nОплата в <b>{asset}</b>: сумму в монете CryptoBot посчитает по текущему курсу.",
     "crypto_pay_button": "💎 Оплатить",
-    "pay_crypto_asset": "{asset} — {amount} {currency}",
+    "choose_coin": (
+        "<b>{title}</b>\n\n💎 Оплата через CryptoBot — <b>{amount} {currency}</b>.\n"
+        "Сумму в выбранной монете CryptoBot посчитает по текущему курсу.\n\nВыбери монету:"
+    ),
     "check_button": "🔄 Проверить оплату",
     "not_paid_yet": "Оплата ещё не поступила. Если уже оплатил — подожди несколько секунд и проверь снова.",
     "invoice_expired": "Срок счёта истёк. Создай новый.",

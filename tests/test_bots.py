@@ -68,10 +68,15 @@ async def test_deep_link_opens_product(env, dp):
     await feed(env, dp, message("/start p_vip"))
     sent = env.session().calls(SendMessage)[-1]
     rows = sent.reply_markup.inline_keyboard
-    # Цена в USD: монету покупатель выбирает сам — кнопки по две в ряд.
-    assert [[b.callback_data for b in row] for row in rows] == [
-        ["pay:vip:stars"], ["pay:vip:crypto:USDT", "pay:vip:crypto:TON"], ["cat"]]
-    assert rows[1][1].text == "💎 TON — 4.99 USD"
+    assert [[b.callback_data for b in row] for row in rows] == [["pay:vip:stars"], ["coins:vip"], ["cat"]]
+
+    # Цена в USD: по кнопке крипты — выбор монеты (по две в ряд) и «Назад» к товару.
+    await feed(env, dp, callback("coins:vip"))
+    coins = env.session().calls(EditMessageText)[-1]
+    assert "4.99 USD" in coins.text and "Выбери монету" in coins.text
+    assert [[b.callback_data for b in row] for row in coins.reply_markup.inline_keyboard] == [
+        ["pay:vip:crypto:USDT", "pay:vip:crypto:TON"], ["p:vip"]]
+    assert coins.reply_markup.inline_keyboard[0][1].text == "💎 TON"
 
 
 async def test_product_card_and_back(env, dp):

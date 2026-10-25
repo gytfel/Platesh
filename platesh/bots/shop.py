@@ -51,23 +51,13 @@ def product_view(rt: BotRuntime, product: Product) -> tuple[str, InlineKeyboardM
     for method in rt.cfg.methods_for(product):
         if method == STARS:
             label = rt.cfg.text("pay_stars", amount=product.price_stars)
-        elif rt.cfg.crypto_assets():
-            # Цена в фиате (5 USD) — покупатель сам выбирает монету, по две кнопки в ряд.
-            buttons = [
-                InlineKeyboardButton(
-                    text=rt.cfg.text("pay_crypto_asset", asset=asset_label(asset),
-                                     amount=format_amount(product.price_crypto), currency=rt.cfg.crypto.currency),
-                    callback_data=f"pay:{product.id}:{method}:{asset}",
-                )
-                for asset in rt.cfg.crypto_assets()
-            ]
-            rows += [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
-            continue
         else:
             label = rt.cfg.text(
                 "pay_crypto", amount=format_amount(product.price_crypto), currency=rt.cfg.crypto.currency
             )
-        rows.append([InlineKeyboardButton(text=label, callback_data=f"pay:{product.id}:{method}")])
+        # Цена в фиате (5 USD): по кнопке крипты — выбор монеты.
+        data = f"coins:{product.id}" if method == CRYPTO and rt.cfg.crypto_assets() else f"pay:{product.id}:{method}"
+        rows.append([InlineKeyboardButton(text=label, callback_data=data)])
     if len(rt.cfg.products) > 1:
         rows.append([InlineKeyboardButton(text=rt.cfg.text("back"), callback_data="cat")])
     text = rt.cfg.text(
@@ -75,6 +65,21 @@ def product_view(rt: BotRuntime, product: Product) -> tuple[str, InlineKeyboardM
         title=html.escape(product.title),
         description=product.description,  # описание может содержать HTML-разметку
         price=price_text(rt, product),
+    )
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def coins_view(rt: BotRuntime, product: Product) -> tuple[str, InlineKeyboardMarkup]:
+    """Выбор монеты для оплаты фиатной цены: CryptoBot пересчитает сумму по курсу."""
+    buttons = [InlineKeyboardButton(text=asset_label(asset), callback_data=f"pay:{product.id}:{CRYPTO}:{asset}")
+               for asset in rt.cfg.crypto_assets()]
+    rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    rows.append([InlineKeyboardButton(text=rt.cfg.text("back"), callback_data=f"p:{product.id}")])
+    text = rt.cfg.text(
+        "choose_coin",
+        title=html.escape(product.title),
+        amount=format_amount(product.price_crypto),
+        currency=rt.cfg.crypto.currency,
     )
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -142,6 +147,15 @@ def create_shop_router() -> Router:
             await callback.answer(rt.cfg.text("method_unavailable"), show_alert=True)
             return
         await show(callback, *product_view(rt, product))
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("coins:"))
+    async def show_coins(callback: CallbackQuery, rt: BotRuntime) -> None:
+        product = rt.cfg.products.get(callback.data[6:])
+        if product is None or CRYPTO not in rt.cfg.methods_for(product) or not rt.cfg.crypto_assets():
+            await callback.answer(rt.cfg.text("method_unavailable"), show_alert=True)
+            return
+        await show(callback, *coins_view(rt, product))
         await callback.answer()
 
     @router.callback_query(F.data.startswith("pay:"))

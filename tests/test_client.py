@@ -148,13 +148,17 @@ async def test_paywall_blocks_until_paid(paid_env):
     step2 = own_bot.session.calls(EditMessageText)[-1]
     assert "Подписка на 30 дней" in step2.text and "способ оплаты" in step2.text and step2.parse_mode == "HTML"
     rows = step2.reply_markup.inline_keyboard
-    # Крипта в USD: покупатель сам выбирает монету, по две кнопки в ряд.
     assert [[b.callback_data for b in row] for row in rows] == [
-        ["platesh:pay:premium:stars"],
-        ["platesh:pay:premium:crypto:USDT", "platesh:pay:premium:crypto:TON"],
-        ["platesh:plans"],
-    ]
-    assert [b.text for row in rows[:2] for b in row] == ["⭐ Telegram Stars — 50 ⭐", "💵 USDT — 3 $", "💎 TON — 3 $"]
+        ["platesh:pay:premium:stars"], ["platesh:coins:premium"], ["platesh:plans"]]
+    assert [r[0].text for r in rows[:2]] == ["⭐ Telegram Stars — 50 ⭐", "💎 CryptoBot — 3 $"]
+
+    # Шаг 3: крипта в USD — выбор монеты (по две в ряд), «Назад» — к способам оплаты.
+    await dp.feed_update(own_bot, callback_update("platesh:coins:premium"))
+    coins = own_bot.session.calls(EditMessageText)[-1]
+    assert "CryptoBot — <b>3 $</b>" in coins.text and "монету" in coins.text and coins.parse_mode == "HTML"
+    assert [[b.callback_data for b in row] for row in coins.reply_markup.inline_keyboard] == [
+        ["platesh:pay:premium:crypto:USDT", "platesh:pay:premium:crypto:TON"], ["platesh:plan:premium"]]
+    assert [b.text for b in coins.reply_markup.inline_keyboard[0]] == ["💵 USDT", "💎 TON"]
 
     # «Назад» — снова список подписок.
     await dp.feed_update(own_bot, callback_update("platesh:plans"))
@@ -197,8 +201,8 @@ async def test_renew_button_opens_payment_methods(paid_env):
     await dp.feed_update(own_bot, callback_update("platesh:buy:premium"))
     sent = own_bot.session.calls(SendMessage)[-1]
     assert sent.chat_id == BUYER_ID and "Подписка на 30 дней" in sent.text
-    assert [b.callback_data for row in sent.reply_markup.inline_keyboard for b in row][:3] == [
-        "platesh:pay:premium:stars", "platesh:pay:premium:crypto:USDT", "platesh:pay:premium:crypto:TON"]
+    assert [b.callback_data for row in sent.reply_markup.inline_keyboard for b in row] == [
+        "platesh:pay:premium:stars", "platesh:coins:premium", "platesh:plans"]
     assert own_bot.session.calls(EditMessageText) == []
 
 

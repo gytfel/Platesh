@@ -51,6 +51,7 @@ PAYWALL_TEXT = "🔒 Бот ограничен: нужна подписка. В�
 BUSINESS_TEXT = ("🔒 Бот подключён к твоему аккаунту, но сохранять переписку начнёт только после оформления подписки. "
                  "Выбери подписку:")
 METHOD_TEXT = "Выбери способ оплаты:"
+COIN_TEXT = "Выбери монету:"
 BACK_TEXT = "‹ Назад"
 BUSINESS_REMIND_EVERY = 6 * 3600  # напоминать владельцу аккаунта не чаще раза в 6 часов
 UNAVAILABLE_TEXT = "Сервис оплаты временно недоступен, попробуй через минуту."
@@ -82,6 +83,7 @@ class PlateshClient:
         self._offer_products: list[str] | None = None
         self._offer_text = PAYWALL_TEXT
         self._method_text = METHOD_TEXT
+        self._coin_text = COIN_TEXT
 
     @classmethod
     def from_env(cls, **kwargs: Any) -> PlateshClient:
@@ -239,18 +241,34 @@ class PlateshClient:
         product = next((p for p in offered if p["id"] == product_id), None)
         if product is None:
             return None
-        rows: list[list[Any]] = []
-        coins: list[Any] = []  # монеты — по две кнопки в ряд
+        rows = []
         for method, label, amount in _methods(info, product):
-            button = InlineKeyboardButton(text=f"{label} — {amount}", callback_data=f"{CALLBACK_PREFIX}pay:{product_id}:{method}")
-            if method.startswith("crypto:"):
-                coins.append(button)
-            else:
-                rows.append([button])
-        rows += [coins[i:i + 2] for i in range(0, len(coins), 2)]
+            # Цена в фиате (5 USD): по кнопке CryptoBot — выбор монеты, иначе сразу счёт.
+            data = (f"{CALLBACK_PREFIX}coins:{product_id}" if method == "crypto" and info.get("crypto_assets")
+                    else f"{CALLBACK_PREFIX}pay:{product_id}:{method}")
+            rows.append([InlineKeyboardButton(text=f"{label} — {amount}", callback_data=data)])
         if back:
             rows.append([InlineKeyboardButton(text=BACK_TEXT, callback_data=f"{CALLBACK_PREFIX}plans")])
         text = f"📅 <b>{escape(_plan_names(product, offered)[1])}</b>\n\n{self._method_text}"
+        return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+    async def coin_offer(self, product_id: str) -> tuple[str, Any] | None:
+        """Шаг 3 — монеты CryptoBot («💎 TON», «💵 USDT»…) для цены в фиате и «Назад» к способам оплаты."""
+        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+        info, offered = await self._offered(None)
+        product = next((p for p in offered if p["id"] == product_id), None)
+        crypto = next((m for m in _methods(info, product) if m[0] == "crypto"), None) if product else None
+        if crypto is None or not info.get("crypto_assets"):
+            return None
+        buttons = [InlineKeyboardButton(text=f"{ASSET_ICONS.get(a, '🪙')} {_asset_name(a)}",
+                                        callback_data=f"{CALLBACK_PREFIX}pay:{product_id}:crypto:{a}")
+                   for a in info["crypto_assets"]]
+        rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+        rows.append([InlineKeyboardButton(text=BACK_TEXT, callback_data=f"{CALLBACK_PREFIX}plan:{product_id}")])
+        text = (f"📅 <b>{escape(_plan_names(product, offered)[1])}</b>\n\n"
+                f"💎 CryptoBot — <b>{crypto[2]}</b>. Сумму в монете CryptoBot посчитает по текущему курсу.\n\n"
+                f"{self._coin_text}")
         return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
     # ------------------------------------------------------------------ aiogram
@@ -328,6 +346,19 @@ class PlateshClient:
         @router.callback_query(F.data.startswith(f"{CALLBACK_PREFIX}plan:"))
         async def on_plan(callback: CallbackQuery) -> None:
             await show_methods(callback, edit=True)
+
+        @router.callback_query(F.data.startswith(f"{CALLBACK_PREFIX}coins:"))
+        async def on_coins(callback: CallbackQuery) -> None:
+            try:
+                offer = await self.coin_offer(callback.data.split(":", 2)[2])
+            except (PlateshError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                log.warning("Platesh недоступен: %s", exc)
+                await callback.answer(UNAVAILABLE_TEXT, show_alert=True)
+                return
+            if offer is None:
+                await callback.answer("Оплата криптой сейчас недоступна", show_alert=True)
+                return
+            await show(callback, offer[0], offer[1], "HTML", edit=True)
 
         @router.callback_query(F.data.startswith(f"{CALLBACK_PREFIX}buy:"))
         async def on_buy(callback: CallbackQuery) -> None:
@@ -412,7 +443,7 @@ class PlateshClient:
 
     def paywall(self, products: Iterable[str] | None = None, *, allow_commands: Iterable[str] = ("paysupport", "terms"),
                 exempt_users: Iterable[int] = (), text: str = PAYWALL_TEXT, business_text: str = BUSINESS_TEXT,
-                method_text: str = METHOD_TEXT):
+                method_text: str = METHOD_TEXT, coin_text: str = COIN_TEXT):
         """Middleware aiogram: бот работает только для тех, у кого оплачен доступ.
 
         - сообщения и кнопки в личке: без оплаты — предложение оплатить;
@@ -421,7 +452,7 @@ class PlateshClient:
           получает предложение оплатить (не чаще раза в 6 часов).
 
         products — какие товары открывают бота (None — любой оплаченный товар).
-        text — сообщение с кнопками подписок; method_text — подпись к выбору способа оплаты.
+        text — сообщение с кнопками подписок; method_text и coin_text — подписи к выбору способа оплаты и монеты.
         """
         from aiogram import BaseMiddleware
         from aiogram.types import BusinessConnection, BusinessMessagesDeleted, CallbackQuery, Message
@@ -430,7 +461,8 @@ class PlateshClient:
         products = list(products) if products else None
         allowed = {f"/{c.lstrip('/')}" for c in allow_commands}
         exempt = set(exempt_users) | self.admins
-        self._offer_products, self._offer_text, self._method_text = products, text, method_text
+        self._offer_products, self._offer_text = products, text
+        self._method_text, self._coin_text = method_text, coin_text
 
         async def remind_owner(bot: Any, owner_id: int) -> None:
             last = client._business_reminded.get(owner_id)
@@ -511,18 +543,13 @@ def _asset_name(asset: str) -> str:
 
 
 def _methods(info: dict[str, Any], product: dict[str, Any]) -> list[tuple[str, str, str]]:
-    """Способы оплаты товара: (method, подпись, цена). Цена в фиате (5 USD) — по кнопке на каждую монету."""
+    """Способы оплаты товара: (method, подпись, цена)."""
     methods = []
     if product.get("price_stars") is not None and "stars" in info["payments"]:
         methods.append(("stars", "⭐ Telegram Stars", f"{product['price_stars']} ⭐"))
     if product.get("price_crypto") is not None and "crypto" in info["payments"]:
         currency = info["crypto_currency"]
-        price = f"{product['price_crypto']} {CURRENCY_SIGNS.get(currency, currency)}"
-        assets = info.get("crypto_assets") or []  # старый Platesh этого поля не присылает
-        if assets:
-            methods += [(f"crypto:{a}", f"{ASSET_ICONS.get(a, '🪙')} {_asset_name(a)}", price) for a in assets]
-        else:
-            methods.append(("crypto", "💎 CryptoBot", price))
+        methods.append(("crypto", "💎 CryptoBot", f"{product['price_crypto']} {CURRENCY_SIGNS.get(currency, currency)}"))
     return methods
 
 
