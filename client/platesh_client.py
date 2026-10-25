@@ -45,6 +45,7 @@ PAYLOAD_PREFIX = "pl:"
 CALLBACK_PREFIX = "platesh:"
 ACCESS_TTL = 60  # сколько секунд помнить «доступ есть»
 NO_ACCESS_TTL = 5  # и «доступа нет» (коротко, чтобы оплата криптой подхватывалась быстро)
+BOT_INFO_TTL = 300  # цены и товары из config.yaml Platesh перечитываем раз в 5 минут
 
 PAYWALL_TEXT = "🔒 Бот ограничен: нужна подписка. Выбери подписку:"
 BUSINESS_TEXT = ("🔒 Бот подключён к твоему аккаунту, но сохранять переписку начнёт только после оформления подписки. "
@@ -53,6 +54,11 @@ METHOD_TEXT = "Выбери способ оплаты:"
 BACK_TEXT = "‹ Назад"
 BUSINESS_REMIND_EVERY = 6 * 3600  # напоминать владельцу аккаунта не чаще раза в 6 часов
 UNAVAILABLE_TEXT = "Сервис оплаты временно недоступен, попробуй через минуту."
+ASSET_UNAVAILABLE_TEXT = "Оплата в {asset} сейчас недоступна. Выбери другую монету."
+# Монеты CryptoBot на кнопках и знаки валют для цены в фиате («5 $»).
+ASSET_NAMES = {"SOL": "Solana", "BTC": "Bitcoin", "ETH": "Ethereum", "TRX": "TRON", "LTC": "Litecoin"}
+ASSET_ICONS = {"TON": "💎", "USDT": "💵", "USDC": "💵", "SOL": "◎", "BTC": "₿", "ETH": "Ξ"}
+CURRENCY_SIGNS = {"USD": "$", "EUR": "€", "RUB": "₽"}
 
 
 class PlateshError(Exception):
@@ -69,6 +75,7 @@ class PlateshClient:
         self._session: aiohttp.ClientSession | None = None
         self._access_cache: dict[tuple[int, str | None, int | None], tuple[bool, float]] = {}
         self._bot_info: dict[str, Any] | None = None
+        self._bot_info_until = 0.0
         self._business_owners: dict[str, int] = {}  # business_connection_id -> владелец аккаунта
         self._business_reminded: dict[int, float] = {}
         # Что показывать на кнопках «Назад»/«Продлить» — задаёт paywall().
@@ -122,7 +129,9 @@ class PlateshClient:
         currency: str | None = None,
         payload: str | None = None,
         send: bool = False,
+        asset: str | None = None,
     ) -> dict[str, Any]:
+        """asset — монета (TON, USDT...), если цена в фиате и покупатель выбрал, чем платить."""
         body = {
             "bot": self.bot,
             "method": method,
@@ -134,6 +143,7 @@ class PlateshClient:
             "currency": currency,
             "payload": payload,
             "send": send,
+            "asset": asset,
         }
         return await self._request("POST", "/api/v1/invoices", json={k: v for k, v in body.items() if v is not None})
 
@@ -143,11 +153,12 @@ class PlateshClient:
 
     async def bot_info(self) -> dict[str, Any]:
         """Настройки бота из config.yaml: способы оплаты, товары, цены, закрытые чаты."""
-        if self._bot_info is None:
+        if self._bot_info is None or time.monotonic() > self._bot_info_until:
             bots = await self._request("GET", "/api/v1/bots")
-            self._bot_info = next((b for b in bots if b["name"] == self.bot), None)
-            if self._bot_info is None:
+            info = next((b for b in bots if b["name"] == self.bot), None)
+            if info is None:
                 raise PlateshError(f"бот «{self.bot}» не найден в Platesh")
+            self._bot_info, self._bot_info_until = info, time.monotonic() + BOT_INFO_TTL
         return self._bot_info
 
     # ------------------------------------------------------------------ доступы
@@ -228,9 +239,15 @@ class PlateshClient:
         product = next((p for p in offered if p["id"] == product_id), None)
         if product is None:
             return None
-        rows = [[InlineKeyboardButton(text=f"{label} — {amount}",
-                                      callback_data=f"{CALLBACK_PREFIX}pay:{product_id}:{method}")]
-                for method, label, amount in _methods(info, product)]
+        rows: list[list[Any]] = []
+        coins: list[Any] = []  # монеты — по две кнопки в ряд
+        for method, label, amount in _methods(info, product):
+            button = InlineKeyboardButton(text=f"{label} — {amount}", callback_data=f"{CALLBACK_PREFIX}pay:{product_id}:{method}")
+            if method.startswith("crypto:"):
+                coins.append(button)
+            else:
+                rows.append([button])
+        rows += [coins[i:i + 2] for i in range(0, len(coins), 2)]
         if back:
             rows.append([InlineKeyboardButton(text=BACK_TEXT, callback_data=f"{CALLBACK_PREFIX}plans")])
         text = f"📅 <b>{escape(_plan_names(product, offered)[1])}</b>\n\n{self._method_text}"
@@ -328,12 +345,14 @@ class PlateshClient:
 
         @router.callback_query(F.data.startswith(f"{CALLBACK_PREFIX}pay:"))
         async def on_pay(callback: CallbackQuery) -> None:
-            _, _, product_id, method = (callback.data.split(":", 3) + ["", ""])[:4]
+            _, _, product_id, method, asset = (callback.data.split(":", 4) + ["", "", ""])[:5]
             try:
-                await self.create_invoice(method=method, product_id=product_id, user_id=callback.from_user.id, send=True)
+                await self.create_invoice(method=method, product_id=product_id, user_id=callback.from_user.id,
+                                          send=True, asset=asset or None)
             except (PlateshError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
                 log.warning("Не удалось создать счёт: %s", exc)
-                await callback.answer(UNAVAILABLE_TEXT, show_alert=True)
+                text = ASSET_UNAVAILABLE_TEXT.format(asset=_asset_name(asset)) if asset else UNAVAILABLE_TEXT
+                await callback.answer(text, show_alert=True)
                 return
             await callback.answer()
 
@@ -487,13 +506,23 @@ class PlateshClient:
                 getattr(dp, observer).outer_middleware(middleware)
 
 
+def _asset_name(asset: str) -> str:
+    return ASSET_NAMES.get(asset, asset)
+
+
 def _methods(info: dict[str, Any], product: dict[str, Any]) -> list[tuple[str, str, str]]:
-    """Способы оплаты товара: (method, подпись, цена)."""
+    """Способы оплаты товара: (method, подпись, цена). Цена в фиате (5 USD) — по кнопке на каждую монету."""
     methods = []
     if product.get("price_stars") is not None and "stars" in info["payments"]:
         methods.append(("stars", "⭐ Telegram Stars", f"{product['price_stars']} ⭐"))
     if product.get("price_crypto") is not None and "crypto" in info["payments"]:
-        methods.append(("crypto", "💎 CryptoBot", f"{product['price_crypto']} {info['crypto_currency']}"))
+        currency = info["crypto_currency"]
+        price = f"{product['price_crypto']} {CURRENCY_SIGNS.get(currency, currency)}"
+        assets = info.get("crypto_assets") or []  # старый Platesh этого поля не присылает
+        if assets:
+            methods += [(f"crypto:{a}", f"{ASSET_ICONS.get(a, '🪙')} {_asset_name(a)}", price) for a in assets]
+        else:
+            methods.append(("crypto", "💎 CryptoBot", price))
     return methods
 
 

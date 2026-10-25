@@ -8,13 +8,14 @@ import logging
 import os
 import secrets
 import sys
+from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 # Остальная программа импортируется внутри функций: команда update должна работать,
 # даже если какой-то файл программы сломан или не хватает библиотеки.
 if TYPE_CHECKING:
-    from .config import Config
+    from .config import BotConfig, Config
 
 
 async def check(cfg: Config) -> bool:
@@ -30,6 +31,7 @@ async def check(cfg: Config) -> bool:
 
     good = True
     crypto_checked: dict[tuple[str, bool], str] = {}
+    coins_checked: dict[tuple, str] = {}
     proxy = cfg.proxy_url
     print(f"База данных: {cfg.database}")
     print(f"Связь с Telegram: {'через прокси ' + mask_proxy(proxy) if proxy else 'напрямую'}")
@@ -44,6 +46,7 @@ async def check(cfg: Config) -> bool:
             good = False
             continue
         problems: list[str] = []
+        coins_line = ""
         try:
             me = await bot.get_me()
             status = f"✅ {b.name}: @{me.username} ({b.mode})"
@@ -69,8 +72,17 @@ async def check(cfg: Config) -> bool:
                 finally:
                     await client.close()
             methods.append(f"{crypto_checked[key]}, цены в {b.crypto.currency}")
+            assets = b.crypto_assets()
+            if assets and "❌" not in crypto_checked[key]:
+                coins_key = (*key, b.crypto.currency, assets)
+                if coins_key not in coins_checked:
+                    coins_checked[coins_key], coins_ok = await check_coins(b, proxy)
+                    good = good and coins_ok
+                coins_line = coins_checked[coins_key]
         print(status)
         print(f"   оплата: {', '.join(methods) or 'нет включённых способов'}")
+        if coins_line:
+            print(f"   монеты на выбор: {coins_line}")
         print(f"   товаров: {len(b.products)}, админы: {', '.join(map(str, b.admins)) or 'не заданы'}")
         if b.notify_url:
             print(f"   notify_url: {b.notify_url}")
@@ -81,6 +93,39 @@ async def check(cfg: Config) -> bool:
     for name in weak_keys(cfg):
         print(f"⚠️ {name} короче {MIN_KEY_LENGTH} символов — сгенерируй надёжный: python -m platesh genkey")
     return good
+
+
+async def check_coins(b: BotConfig, proxy: str | None) -> tuple[str, bool]:
+    """Принимает ли CryptoBot каждую монету: пробный счёт на цену товара, сразу удаляется."""
+    from decimal import Decimal
+
+    from .cryptopay import CryptoPayClient, CryptoPayError
+    from .texts import asset_name
+
+    prices = [p.price_crypto for p in b.products.values() if p.price_crypto is not None]
+    amount = max(prices) if prices else Decimal(5)
+    client = CryptoPayClient(b.crypto.token, testnet=b.crypto.testnet, proxy=proxy)
+    results, all_ok = [], True
+    try:
+        for asset in b.crypto_assets():
+            try:
+                invoice = await client.create_invoice(
+                    amount, currency=b.crypto.currency, is_fiat=True, accepted_assets=(asset,),
+                    description="Проверка Platesh — счёт сразу удаляется", expires_in=60,
+                )
+            except CryptoPayError as exc:
+                results.append(f"❌ {asset_name(asset)} ({exc})")
+                all_ok = False
+                continue
+            results.append(f"✅ {asset_name(asset)}")
+            with suppress(CryptoPayError):
+                await client.delete_invoice(invoice["invoice_id"])
+    finally:
+        await client.close()
+    line = ", ".join(results)
+    if not all_ok:
+        line += "\n   ⚠️ Монеты с ❌ CryptoBot не принимает — убери их из cryptobot.accepted_assets в config.yaml"
+    return line, all_ok
 
 
 def bot_env_lines(cfg: Config, token: str) -> str:

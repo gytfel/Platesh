@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 from aiogram import Dispatcher
-from aiogram.methods import AnswerPreCheckoutQuery, BanChatMember, EditMessageText, SendInvoice, SendMessage
+from aiogram.methods import AnswerCallbackQuery, AnswerPreCheckoutQuery, BanChatMember, EditMessageText, SendInvoice, SendMessage
 from aiogram.types import (
     CallbackQuery,
     Chat,
@@ -148,8 +148,13 @@ async def test_paywall_blocks_until_paid(paid_env):
     step2 = own_bot.session.calls(EditMessageText)[-1]
     assert "Подписка на 30 дней" in step2.text and "способ оплаты" in step2.text and step2.parse_mode == "HTML"
     rows = step2.reply_markup.inline_keyboard
-    assert [r[0].callback_data for r in rows] == ["platesh:pay:premium:stars", "platesh:pay:premium:crypto", "platesh:plans"]
-    assert [r[0].text for r in rows[:2]] == ["⭐ Telegram Stars — 50 ⭐", "💎 CryptoBot — 3 USD"]
+    # Крипта в USD: покупатель сам выбирает монету, по две кнопки в ряд.
+    assert [[b.callback_data for b in row] for row in rows] == [
+        ["platesh:pay:premium:stars"],
+        ["platesh:pay:premium:crypto:USDT", "platesh:pay:premium:crypto:TON"],
+        ["platesh:plans"],
+    ]
+    assert [b.text for row in rows[:2] for b in row] == ["⭐ Telegram Stars — 50 ⭐", "💵 USDT — 3 $", "💎 TON — 3 $"]
 
     # «Назад» — снова список подписок.
     await dp.feed_update(own_bot, callback_update("platesh:plans"))
@@ -173,14 +178,27 @@ async def test_paywall_blocks_until_paid(paid_env):
     assert handled[-1] == "теперь можно?"
 
 
+async def test_pay_in_chosen_coin(paid_env):
+    """Цена 3 USD, покупатель нажал «TON» — счёт CryptoBot только в TON, сумма по курсу."""
+    env, client, own_bot, dp, handled = paid_env
+    await dp.feed_update(own_bot, callback_update("platesh:pay:premium:crypto:TON"))
+    created = env.payments.crypto(env.ext).created[-1]
+    assert created["is_fiat"] is True and created["amount"] == 3 and created["accepted_assets"] == ("TON",)
+    assert "Оплата в <b>TON</b>" in env.session("ext").calls(SendMessage)[-1].text
+
+    await dp.feed_update(own_bot, callback_update("platesh:pay:premium:crypto:SOL"))  # монеты нет в настройках
+    alert = own_bot.session.calls(AnswerCallbackQuery)[-1]
+    assert alert.show_alert and "Оплата в Solana сейчас недоступна" in alert.text
+
+
 async def test_renew_button_opens_payment_methods(paid_env):
     """«Продлить» из напоминания Platesh — сразу выбор способа оплаты новым сообщением."""
     env, client, own_bot, dp, handled = paid_env
     await dp.feed_update(own_bot, callback_update("platesh:buy:premium"))
     sent = own_bot.session.calls(SendMessage)[-1]
     assert sent.chat_id == BUYER_ID and "Подписка на 30 дней" in sent.text
-    assert [r[0].callback_data for r in sent.reply_markup.inline_keyboard][:2] == [
-        "platesh:pay:premium:stars", "platesh:pay:premium:crypto"]
+    assert [b.callback_data for row in sent.reply_markup.inline_keyboard for b in row][:3] == [
+        "platesh:pay:premium:stars", "platesh:pay:premium:crypto:USDT", "platesh:pay:premium:crypto:TON"]
     assert own_bot.session.calls(EditMessageText) == []
 
 

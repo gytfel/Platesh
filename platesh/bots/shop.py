@@ -23,7 +23,7 @@ from aiogram.types import (
 from ..config import CRYPTO, STARS, Product
 from ..models import EXPIRED, PAID, REFUNDED
 from ..payments import PaymentError, PaymentService
-from ..texts import format_amount, format_date
+from ..texts import asset_label, format_amount, format_date
 from .registry import BotRuntime
 
 log = logging.getLogger(__name__)
@@ -51,6 +51,18 @@ def product_view(rt: BotRuntime, product: Product) -> tuple[str, InlineKeyboardM
     for method in rt.cfg.methods_for(product):
         if method == STARS:
             label = rt.cfg.text("pay_stars", amount=product.price_stars)
+        elif rt.cfg.crypto_assets():
+            # Цена в фиате (5 USD) — покупатель сам выбирает монету, по две кнопки в ряд.
+            buttons = [
+                InlineKeyboardButton(
+                    text=rt.cfg.text("pay_crypto_asset", asset=asset_label(asset),
+                                     amount=format_amount(product.price_crypto), currency=rt.cfg.crypto.currency),
+                    callback_data=f"pay:{product.id}:{method}:{asset}",
+                )
+                for asset in rt.cfg.crypto_assets()
+            ]
+            rows += [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+            continue
         else:
             label = rt.cfg.text(
                 "pay_crypto", amount=format_amount(product.price_crypto), currency=rt.cfg.crypto.currency
@@ -134,7 +146,7 @@ def create_shop_router() -> Router:
 
     @router.callback_query(F.data.startswith("pay:"))
     async def pay(callback: CallbackQuery, rt: BotRuntime, payments: PaymentService) -> None:
-        _, product_id, method = (callback.data.split(":", 2) + ["", ""])[:3]
+        _, product_id, method, asset = (callback.data.split(":", 3) + ["", "", ""])[:4]
         product = rt.cfg.products.get(product_id)
         if product is None or method not in (STARS, CRYPTO):
             await callback.answer(rt.cfg.text("method_unavailable"), show_alert=True)
@@ -143,9 +155,10 @@ def create_shop_router() -> Router:
         chat_id = callback.message.chat.id if callback.message is not None else callback.from_user.id
         try:
             inv = await payments.create_invoice(
-                rt, method=method, user_id=callback.from_user.id, product=product, stars_link=False, reuse=True
+                rt, method=method, user_id=callback.from_user.id, product=product, stars_link=False, reuse=True,
+                asset=asset or None,
             )
-            await payments.send_invoice(rt, inv, chat_id)
+            await payments.send_invoice(rt, inv, chat_id, asset=asset or None)
         except PaymentError as exc:
             await callback.answer(str(exc), show_alert=True)
             return

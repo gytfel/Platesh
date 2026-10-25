@@ -67,8 +67,11 @@ async def test_start_for_admin_has_hint(env, dp):
 async def test_deep_link_opens_product(env, dp):
     await feed(env, dp, message("/start p_vip"))
     sent = env.session().calls(SendMessage)[-1]
-    data = [b.callback_data for row in sent.reply_markup.inline_keyboard for b in row]
-    assert data == ["pay:vip:stars", "pay:vip:crypto", "cat"]
+    rows = sent.reply_markup.inline_keyboard
+    # Цена в USD: монету покупатель выбирает сам — кнопки по две в ряд.
+    assert [[b.callback_data for b in row] for row in rows] == [
+        ["pay:vip:stars"], ["pay:vip:crypto:USDT", "pay:vip:crypto:TON"], ["cat"]]
+    assert rows[1][1].text == "💎 TON — 4.99 USD"
 
 
 async def test_product_card_and_back(env, dp):
@@ -124,6 +127,18 @@ async def test_crypto_purchase_and_check_button(env, dp):
     # Чужой счёт проверить нельзя.
     await feed(env, dp, callback(check_data, uid=BUYER_ID + 1))
     assert "недействителен" in env.session().calls(AnswerCallbackQuery)[-1].text
+
+
+async def test_crypto_coin_chosen_by_buyer(env, dp):
+    """Цена 4.99 USD, покупатель выбрал TON — CryptoBot выставит счёт только в TON по курсу."""
+    await feed(env, dp, callback("pay:vip:crypto:TON"))
+    created = env.crypto().created[-1]
+    assert created["is_fiat"] is True and created["currency"] == "USD" and created["accepted_assets"] == ("TON",)
+    assert "Оплата в <b>TON</b>" in env.session().calls(SendMessage)[-1].text
+
+    await feed(env, dp, callback("pay:vip:crypto:BTC"))  # монеты нет в accepted_assets
+    answer = env.session().calls(AnswerCallbackQuery)[-1]
+    assert answer.show_alert and "недоступен" in answer.text
 
 
 async def test_unavailable_method(env, dp):

@@ -129,6 +129,10 @@ class BotConfig:
             return False
         return method != CRYPTO or self.crypto.enabled
 
+    def crypto_assets(self) -> tuple[str, ...]:
+        """Монеты, между которыми покупатель выбирает кнопками: только при цене в фиате (5 USD)."""
+        return self.crypto.accepted_assets if self.method_enabled(CRYPTO) and self.crypto.is_fiat else ()
+
     def methods_for(self, product: Product) -> list[str]:
         methods = []
         if product.price_stars is not None and self.method_enabled(STARS):

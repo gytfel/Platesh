@@ -68,6 +68,7 @@ def test_paywall_and_shop_bots(tmp_path):
     w, term = wizard(tmp_path, [
         "123456789",                    # мой ID
         "12345:crypto", "",             # CryptoBot, валюта по умолчанию USD
+        "ton, usdt; sol",               # монеты на выбор покупателю
         "bad", "111:AAA",               # неверный токен → переспросил
         "д", "", "150", "2,5", "",      # свой код есть (пейволл), название, цены, срок 30
         f'"{bot_dir / "bot.py"}"', "",  # путь (с кавычками, как копирует Windows), команда по умолчанию
@@ -91,6 +92,7 @@ def test_paywall_and_shop_bots(tmp_path):
     premium = paywall.products["premium"]
     assert premium.price_stars == 150 and premium.price_crypto == Decimal("2.5") and premium.days == 30
     assert paywall.crypto.token == "12345:crypto" and paywall.crypto.currency == "USD"
+    assert paywall.crypto.accepted_assets == ("TON", "USDT", "SOL")
     assert paywall.run.cwd == bot_dir and paywall.run.command[-1] == "bot.py"
 
     assert shop.name == "shop_bot" and shop.mode == "managed" and shop.api_key is None and shop.run is None
@@ -208,21 +210,21 @@ def test_paywall_without_code_path_warns(tmp_path):
 
 
 def test_reconfigure_keeps_previous_tokens_on_enter(tmp_path):
-    first, _ = wizard(tmp_path, ["555", "12345:crypto", "EUR", "111:AAA", "д", "", "100", "", "", "", "", "н"])
+    first, _ = wizard(tmp_path, ["555", "12345:crypto", "EUR", "ton", "111:AAA", "д", "", "100", "", "", "", "", "н"])
     first.run()
     # Второй раз: перенастроить, везде Enter — только режим меняем на магазин.
-    second, term = wizard(tmp_path, ["д", "", "", "", "", "", "", "100", "", "", "", "", "н"])
+    second, term = wizard(tmp_path, ["д", "", "", "", "", "", "", "", "100", "", "", "", "", "н"])
     second.run()
     cfg = load_config(tmp_path / "config.yaml")
     [bot] = cfg.bots
     assert cfg.admins == (555,) and bot.token == "111:AAA" and bot.managed
-    assert bot.crypto.token == "12345:crypto" and bot.crypto.currency == "EUR"
+    assert bot.crypto.token == "12345:crypto" and bot.crypto.currency == "EUR" and bot.crypto.accepted_assets == ("TON",)
     assert "оставить 111:AA…" not in term.text  # короткий токен целиком не показываем
     assert "Прошлые ответы подставлены" in term.text
 
 
 def test_reconfigure_can_drop_crypto(tmp_path):
-    wizard(tmp_path, ["555", "12345:crypto", "", "111:AAA", "", "", "100", "", "", "", "", "н"])[0].run()
+    wizard(tmp_path, ["555", "12345:crypto", "", "", "111:AAA", "", "", "100", "", "", "", "", "н"])[0].run()
     wizard(tmp_path, ["д", "", "-", "", "", "", "100", "", "", "", "н"])[0].run()
     assert not load_config(tmp_path / "config.yaml").bots[0].crypto.enabled
 

@@ -156,6 +156,7 @@ def create_app(cfg: Config, registry: BotRegistry, payments: PaymentService) -> 
                 "mode": rt.cfg.mode,
                 "payments": [m for m in PAYMENT_METHODS if rt.cfg.method_enabled(m)],
                 "crypto_currency": rt.cfg.crypto.currency,
+                "crypto_assets": list(rt.cfg.crypto_assets()),  # монеты на выбор при цене в фиате
                 "products": [
                     {
                         "id": p.id,
@@ -190,6 +191,9 @@ def create_app(cfg: Config, registry: BotRegistry, payments: PaymentService) -> 
         amount = data.get("amount")
         if amount is not None and (isinstance(amount, bool) or not isinstance(amount, (int, float, str))):
             raise ApiError(400, "amount должен быть числом или строкой")
+        asset = _str(data.get("asset"), "asset", max_len=10)
+        if asset and asset.upper() not in rt.cfg.crypto_assets():
+            raise ApiError(400, f"asset: монета {asset} не в cryptobot.accepted_assets (или цена не в фиате)")
         inv = await payments.create_invoice(
             rt,
             method=method,
@@ -200,10 +204,11 @@ def create_app(cfg: Config, registry: BotRegistry, payments: PaymentService) -> 
             title=_str(data.get("title"), "title", max_len=255),
             description=_str(data.get("description"), "description", max_len=1024),
             payload=_str(data.get("payload"), "payload", max_len=4096),
+            asset=asset,
         )
         if send:
             try:
-                await payments.send_invoice(rt, inv, user_id)
+                await payments.send_invoice(rt, inv, user_id, asset=asset.upper() if asset else None)
             except TelegramAPIError as exc:
                 raise ApiError(400, f"счёт создан ({inv.id}), но отправить его не удалось: {exc.message}") from exc
         return ok(inv.to_dict())

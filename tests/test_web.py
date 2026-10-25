@@ -71,6 +71,23 @@ async def test_create_custom_crypto_invoice_and_send(client, env):
     assert [b.url for row in msg.reply_markup.inline_keyboard for b in row] == [inv["pay_url"]]
 
 
+async def test_crypto_invoice_in_chosen_coin(client, env):
+    resp = await client.get("/api/v1/bots", headers=AUTH)
+    assert {b["name"]: b["crypto_assets"] for b in (await resp.json())["result"]}["ext"] == ["USDT", "TON"]
+
+    resp = await client.post("/api/v1/invoices", headers=AUTH, json={
+        "bot": "ext", "method": "crypto", "amount": "5", "title": "Подписка", "asset": "ton", "user_id": BUYER_ID, "send": True,
+    })
+    assert resp.status == 200, await resp.text()
+    created = env.payments.crypto(env.ext).created[-1]
+    assert created["is_fiat"] is True and created["currency"] == "USD" and created["accepted_assets"] == ("TON",)
+    assert "Оплата в <b>TON</b>" in env.session("ext").requests[-1].text
+
+    resp = await client.post("/api/v1/invoices", headers=AUTH, json={
+        "bot": "ext", "method": "crypto", "amount": "5", "title": "Подписка", "asset": "SOL"})
+    assert resp.status == 400 and "accepted_assets" in (await resp.json())["error"]
+
+
 @pytest.mark.parametrize("body, status", [
     ({"bot": "nope", "method": "stars", "amount": 5, "title": "x"}, 404),
     ({"bot": "shop", "method": "card", "amount": 5, "title": "x"}, 400),

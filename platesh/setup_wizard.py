@@ -20,7 +20,7 @@ from typing import Callable
 
 import yaml
 
-from .config import clean_text
+from .config import FIAT_CURRENCIES, clean_text
 from .net import mask_proxy, normalize_proxy, resolve_proxy
 
 CLIENT_FILE = Path(__file__).resolve().parent.parent / "client" / "platesh_client.py"
@@ -174,6 +174,8 @@ def utf8_erase(stream=None) -> None:
         pass
 
 
+DEFAULT_ASSETS = ("USDT", "TON")  # монеты на выбор покупателю, если цена в фиате
+
 class Wizard:
     def __init__(
         self,
@@ -225,6 +227,7 @@ class Wizard:
             "admin": cfg.admins[0] if cfg.admins else None,
             "crypto_token": crypto.token if crypto else None,
             "currency": crypto.currency if crypto else "USD",
+            "assets": crypto.accepted_assets if crypto else (),
             "bot_tokens": [b.token for b in cfg.bots],
             "proxy": cfg.proxy,
         }
@@ -264,18 +267,18 @@ class Wizard:
 
     # ------------------------------------------------------------------ шаги
 
-    def ask_crypto(self) -> tuple[str | None, bool, str]:
+    def ask_crypto(self) -> tuple[str | None, bool, str, tuple[str, ...]]:
         self.say("\nCryptoBot — оплата криптой (USDT, TON...). Токен: @CryptoBot → Crypto Pay → Create App.")
         previous = self.previous.get("crypto_token")
         while True:
             if previous:
                 token = self.ask_secret("Токен CryptoBot («-» — без крипты)", previous)
                 if token == "-":
-                    return None, False, "USD"
+                    return None, False, "USD", ()
             else:
                 token = self.ask("Токен CryptoBot (Enter — без крипты, только Stars)")
             if not token:
-                return None, False, "USD"
+                return None, False, "USD", ()
             self.say("  Проверяю...")
             status, info, testnet = self.check_crypto(token, resolve_proxy(self.proxy))
             if status == "ok":
@@ -287,7 +290,13 @@ class Wizard:
             self.say(f"  ❌ {info}. Попробуй ещё раз.")
         currency = self.ask("Валюта цен для крипты (USD, EUR, RUB или монета USDT, TON)",
                             self.previous.get("currency") or "USD").upper()
-        return token, testnet, currency
+        assets: tuple[str, ...] = ()
+        if currency in FIAT_CURRENCIES:
+            self.say(f"  Цена будет в {currency}, а монету покупатель выберет сам — CryptoBot пересчитает по курсу.")
+            answer = self.ask("Какими монетами можно платить, через запятую (USDT, TON, BTC, ETH, LTC, TRX, USDC)",
+                              ", ".join(self.previous.get("assets") or DEFAULT_ASSETS))
+            assets = tuple(dict.fromkeys(a.strip().upper() for a in answer.replace(";", ",").split(",") if a.strip()))
+        return token, testnet, currency, assets or DEFAULT_ASSETS
 
     def handle_offline(self, token: str, error: str) -> tuple[str, str]:
         """Telegram недоступен: предлагаем VPN или прокси и проверяем снова."""
@@ -379,7 +388,7 @@ class Wizard:
     # ------------------------------------------------------------------ запись файлов
 
     def build_config(self, admin_id: int, port: int, crypto: tuple[str | None, bool, str], bots: list[BotSetup]) -> dict:
-        token, testnet, currency = crypto
+        token, testnet, currency, assets = crypto
         config: dict = {
             "database": "data/platesh.db",
             "admins": [admin_id],
@@ -397,7 +406,7 @@ class Wizard:
                 "token": "${CRYPTOBOT_TOKEN}",
                 "testnet": testnet,
                 "currency": currency,
-                "accepted_assets": ["USDT", "TON", "BTC", "ETH", "LTC", "TRX", "USDC"],
+                "accepted_assets": list(assets),
                 "poll_interval": 10,
             }
         config["bots"] = []

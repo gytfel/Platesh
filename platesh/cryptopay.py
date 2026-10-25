@@ -114,6 +114,9 @@ class CryptoPayClient:
             params["paid_btn_url"] = paid_btn_url
         return await self.call("createInvoice", **params)
 
+    async def delete_invoice(self, invoice_id: int | str) -> None:
+        await self.call("deleteInvoice", invoice_id=int(invoice_id))
+
     async def get_invoices(self, invoice_ids: list[int | str]) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         for start in range(0, len(invoice_ids), 100):

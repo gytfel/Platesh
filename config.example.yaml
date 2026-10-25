@@ -34,10 +34,11 @@ server:
 cryptobot:
   token: ${CRYPTOBOT_TOKEN:-}
   testnet: false
-  # Валюта цен price.crypto. Фиат (USD, EUR, RUB, ...) — покупатель платит любой
-  # монетой из accepted_assets по курсу. Или конкретная монета: USDT, TON, BTC...
+  # Валюта цен price.crypto. Фиат (USD, EUR, RUB, ...) — покупатель выбирает монету из
+  # accepted_assets кнопкой (по кнопке на монету) и платит по курсу. Или конкретная монета: USDT, TON...
+  # Какие монеты CryptoBot принимает на самом деле — покажет python -m platesh check.
   currency: USD
-  accepted_assets: [USDT, TON, BTC, ETH, LTC, TRX, USDC]
+  accepted_assets: [USDT, TON]
   expires_in: 3600        # сколько секунд счёт можно оплатить
   poll_interval: 10       # как часто проверять оплату (сек). 0 — только вебхук
 

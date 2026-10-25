@@ -19,7 +19,7 @@ from .db import Database
 from .delivery import deliver
 from .models import EXPIRED, FAILED, PAID, PENDING, REFUNDED, Invoice, parse_payload
 from .notifier import Notifier
-from .texts import format_amount
+from .texts import asset_name, format_amount
 
 if TYPE_CHECKING:
     from .bots.registry import BotRegistry, BotRuntime
@@ -111,11 +111,19 @@ class PaymentService:
         payload: str | None = None,
         stars_link: bool = True,
         reuse: bool = False,
+        asset: str | None = None,
     ) -> Invoice:
-        """Создаёт счёт. Для товара цена берётся из конфига, иначе нужны amount и title."""
+        """Создаёт счёт. Для товара цена берётся из конфига, иначе нужны amount и title.
+
+        asset — монета, которую выбрал покупатель (цена в фиате, например 5 USD, CryptoBot пересчитает по курсу).
+        """
         cfg = rt.cfg
         if not cfg.method_enabled(method):
             raise PaymentError(cfg.text("method_unavailable"))
+        if asset:
+            asset = asset.upper()
+            if method != CRYPTO or asset not in cfg.crypto_assets():
+                raise PaymentError(cfg.text("method_unavailable"))
 
         if product is not None:
             if method not in cfg.methods_for(product):
@@ -138,7 +146,7 @@ class PaymentService:
         else:
             currency = (currency or cfg.crypto.currency).upper()
 
-        if reuse and product is not None and user_id is not None:
+        if reuse and product is not None and user_id is not None and asset is None:
             window = STARS_REUSE_WINDOW if method == STARS else cfg.crypto.expires_in - CRYPTO_REUSE_MARGIN
             existing = await self.db.find_reusable(rt.name, user_id, product.id, method, int(time.time()) - window)
             if existing is not None and (method == STARS or existing.pay_url):
@@ -168,7 +176,7 @@ class PaymentService:
                     value,
                     currency=currency,
                     is_fiat=currency in FIAT_CURRENCIES,
-                    accepted_assets=c.accepted_assets,
+                    accepted_assets=(asset,) if asset else c.accepted_assets,
                     description=title,
                     payload=inv.tg_payload,
                     expires_in=c.expires_in,
@@ -197,7 +205,7 @@ class PaymentService:
             "prices": [LabeledPrice(label=title, amount=int(inv.amount))],
         }
 
-    async def send_invoice(self, rt: BotRuntime, inv: Invoice, chat_id: int) -> None:
+    async def send_invoice(self, rt: BotRuntime, inv: Invoice, chat_id: int, asset: str | None = None) -> None:
         """Отправляет счёт в чат: нативный счёт Stars или сообщение с кнопкой оплаты CryptoBot."""
         if inv.method == STARS:
             await rt.bot.send_invoice(chat_id, **self._stars_invoice_args(inv))
@@ -211,6 +219,7 @@ class PaymentService:
             amount=format_amount(inv.amount),
             currency=inv.currency,
             minutes=rt.cfg.crypto.expires_in // 60,
+            pay_in=rt.cfg.text("crypto_pay_in", asset=asset_name(asset)) if asset else "",
         )
         await rt.bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
