@@ -215,6 +215,7 @@ def main(argv: list[str] | None = None) -> None:
     logging.getLogger("aiogram.event").setLevel(logging.WARNING)
 
     if args.command == "check":
+        print("Проверяю ботов и CryptoBot… На слабом сервере это может занять пару минут.\n", flush=True)
         sys.exit(0 if asyncio.run(check(cfg)) else 1)
 
     from .app import run
