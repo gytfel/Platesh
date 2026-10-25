@@ -139,9 +139,9 @@ async def test_paywall_blocks_until_paid(paid_env):
     assert handled == []
     offer = own_bot.session.calls(SendMessage)[-1]
     assert "Бот ограничен" in offer.text and "нужна подписка" in offer.text
-    # Шаг 1: выбор подписки — срок и цены всеми способами.
+    # Шаг 1: выбор подписки — только срок, цены — на следующем шаге.
     [[plan]] = offer.reply_markup.inline_keyboard
-    assert plan.callback_data == "platesh:plan:premium" and plan.text == "📅 30 дней — 50 ⭐ · 3 USD"
+    assert plan.callback_data == "platesh:plan:premium" and plan.text == "📅 На 30 дней"
 
     # Шаг 2: то же сообщение меняется на выбор способа оплаты.
     await dp.feed_update(own_bot, callback_update("platesh:plan:premium"))
@@ -188,7 +188,7 @@ def test_plan_names():
     assert [_days(n) for n in (1, 3, 5, 11, 21, 22, 30, 365)] == [
         "1 день", "3 дня", "5 дней", "11 дней", "21 день", "22 дня", "30 дней", "365 дней"]
     month, forever = {"id": "m", "title": "Месяц", "days": 30}, {"id": "f", "title": "Навсегда", "days": None}
-    assert _plan_names(month, [month, forever]) == ("30 дней", "Подписка на 30 дней")
+    assert _plan_names(month, [month, forever]) == ("На 30 дней", "Подписка на 30 дней")
     assert _plan_names(forever, [month, forever]) == ("Навсегда", "Доступ навсегда")
     vip = {"id": "v", "title": "VIP", "days": 30}  # тот же срок — различаем по названию
     assert _plan_names(vip, [month, vip]) == ("VIP", "VIP — 30 дней")

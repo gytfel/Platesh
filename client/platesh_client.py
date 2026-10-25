@@ -212,13 +212,12 @@ class PlateshClient:
         return info, offered
 
     async def offer_markup(self, products: Iterable[str] | None = None):
-        """Шаг 1 — кнопки подписок «📅 30 дней — 350 ⭐ · 4 TON». Способ оплаты выбирается следующим шагом."""
+        """Шаг 1 — кнопки подписок «📅 На 30 дней». Цены и способ оплаты — следующим шагом."""
         from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-        info, offered = await self._offered(products)
-        rows = [[InlineKeyboardButton(
-            text=f"📅 {_plan_names(p, offered)[0]} — {' · '.join(amount for _, _, amount in _methods(info, p))}",
-            callback_data=f"{CALLBACK_PREFIX}plan:{p['id']}")] for p in offered]
+        _, offered = await self._offered(products)
+        rows = [[InlineKeyboardButton(text=f"📅 {_plan_names(p, offered)[0]}", callback_data=f"{CALLBACK_PREFIX}plan:{p['id']}")]
+                for p in offered]
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
     async def method_offer(self, product_id: str, *, back: bool = True) -> tuple[str, Any] | None:
@@ -512,7 +511,7 @@ def _plan_names(product: dict[str, Any], offered: list[dict[str, Any]]) -> tuple
     if sum(1 for p in offered if p.get("days") == days) > 1:
         return product["title"], f"{product['title']} — {_days(days)}" if days else product["title"]
     if days:
-        return _days(days), f"Подписка на {_days(days)}"
+        return f"На {_days(days)}", f"Подписка на {_days(days)}"
     return "Навсегда", "Доступ навсегда"
 
 
