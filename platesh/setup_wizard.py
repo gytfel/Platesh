@@ -229,6 +229,7 @@ class Wizard:
             "currency": crypto.currency if crypto else "USD",
             "assets": crypto.accepted_assets if crypto else (),
             "bot_tokens": [b.token for b in cfg.bots],
+            "bot_keys": {b.token: b.api_key for b in cfg.bots if b.api_key},
             "proxy": cfg.proxy,
         }
 
@@ -515,6 +516,8 @@ class Wizard:
                     self.say("  Этот бот уже добавлен — пропускаю.")
                 else:
                     tokens.add(bot.token)
+                    # Тот же бот — тот же ключ: подключённый код бота (PLATESH_KEY в его .env) продолжит работать.
+                    bot.api_key = (self.previous.get("bot_keys") or {}).get(bot.token, bot.api_key)
                     bots.append(bot)
                 if not self.ask_yes("\nДобавить ещё бота?", False):
                     break

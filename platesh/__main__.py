@@ -151,13 +151,20 @@ def bot_env_lines(cfg: Config, token: str) -> str:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="platesh", description="Платёжный шлюз Stars + CryptoBot для Telegram-ботов")
-    parser.add_argument("command", nargs="?", default="run", choices=["run", "check", "setup", "update", "service", "bot-env", "genkey"],
+    parser.add_argument("command", nargs="?", default="run",
+                        choices=["run", "check", "setup", "update", "service", "bot-env", "genkey",
+                                 "access", "grant", "revoke", "payments", "refund"],
                         help="run — запустить, setup — настроить (вопросы в терминале), check — проверить настройки, "
                              "update — скачать новую версию, service — работать постоянно на Linux-сервере, "
                              "bot-env — строки PLATESH_* для .env бота со своим кодом (токен — в PLATESH_BOT_TOKEN), "
-                             "genkey — придумать ключ API")
+                             "genkey — придумать ключ API. Управление (Platesh должен быть запущен): "
+                             "access ID — доступы пользователя, grant ID [дней] — выдать доступ, revoke ID — закрыть, "
+                             "payments [ID] — последние оплаты, refund СЧЁТ — вернуть Stars")
+    parser.add_argument("params", nargs="*", help="Telegram ID, число дней или номер счёта — для команд управления")
     parser.add_argument("-c", "--config", default="config.yaml", help="путь к config.yaml")
     parser.add_argument("--no-start", action="store_true", help="setup: только настроить, не запускать")
+    parser.add_argument("--bot", help="управление: имя бота из config.yaml, если ботов несколько")
+    parser.add_argument("--product", help="grant/revoke: id товара, если товаров несколько")
     args = parser.parse_args(argv)
 
     if args.command == "genkey":
@@ -165,10 +172,15 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if args.command == "update":
-        from .updater import UpdateError, update
+        from .updater import UpdateError, git_update, update
 
+        project = Path(__file__).resolve().parent.parent
         try:
-            count = update(Path(__file__).resolve().parent.parent)
+            if (project / ".git").is_dir():
+                before, after = git_update(project)
+                print(f"✅ Готово: {before} → {after}" if before != after else f"✅ Уже последняя версия ({after})")
+                return
+            count = update(project)
         except UpdateError as exc:
             print(f"Ошибка: {exc}", file=sys.stderr)
             sys.exit(1)
@@ -202,6 +214,16 @@ def main(argv: list[str] | None = None) -> None:
             print(bot_env_lines(load_config(args.config), os.environ.get("PLATESH_BOT_TOKEN", "")))
         except (ConfigError, LookupError) as exc:
             print(exc, file=sys.stderr)
+            sys.exit(1)
+        return
+
+    if args.command in ("access", "grant", "revoke", "payments", "refund"):
+        from .manage import ManageError, run_command
+
+        try:
+            print(run_command(load_config(args.config), args.command, args.params, bot=args.bot, product=args.product))
+        except (ConfigError, ManageError) as exc:
+            print(f"Ошибка: {exc}", file=sys.stderr)
             sys.exit(1)
         return
 

@@ -274,3 +274,12 @@ def test_broken_letters_in_answers_are_removed(tmp_path):
     [bot] = load_config(tmp_path / "config.yaml").bots
     assert bot.products["premium"].title == "Премим"
     assert "\\u" not in (tmp_path / "config.yaml").read_text(encoding="utf-8")
+
+
+def test_reconfigure_keeps_bot_api_key(tmp_path):
+    """Повторная настройка не ломает подключённый код бота: ключ (PLATESH_KEY у бота) остаётся прежним."""
+    wizard(tmp_path, ["7", "", "111:AAA", "д", "", "100", "", "", "н", "н"])[0].run()
+    key = load_config(tmp_path / "config.yaml").bots[0].api_key
+    wizard(tmp_path, ["д", "", "", "", "д", "", "200", "", "", "н", "н"])[0].run()
+    [bot] = load_config(tmp_path / "config.yaml").bots
+    assert bot.api_key == key and bot.products["premium"].price_stars == 200

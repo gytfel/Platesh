@@ -96,3 +96,53 @@ def test_low_disk_warning(tmp_path, monkeypatch, caplog):
     monkeypatch.setattr(app.shutil, "disk_usage", lambda path: shutil_module._ntuple_diskusage(10**9, 10**9, 5 * 1024 * 1024))
     app.warn_low_disk(tmp_path / "data")
     assert any("осталось 5 МБ" in r.getMessage() for r in caplog.records)
+
+
+def test_git_update_pulls_installs_and_restarts(tmp_path, monkeypatch):
+    """Сервер (установка через git): git pull, новые библиотеки, перезапуск службы."""
+    import subprocess
+
+    from platesh import updater
+
+    def sh(*args, cwd=None):
+        subprocess.run(args, cwd=cwd, check=True, capture_output=True)
+
+    git_env = ["-c", "user.name=t", "-c", "user.email=t@t"]
+    work = tmp_path / "work"
+    work.mkdir()
+    sh("git", "init", "-q", "-b", "main", str(work))
+    (work / "requirements.txt").write_text("aiogram\n")
+    sh("git", *git_env, "-C", str(work), "add", "-A")
+    sh("git", *git_env, "-C", str(work), "commit", "-q", "-m", "v1")
+    sh("git", "clone", "-q", "--bare", str(work), str(tmp_path / "origin.git"))
+    server = tmp_path / "server"
+    sh("git", "clone", "-q", str(tmp_path / "origin.git"), str(server))
+    (server / ".venv").mkdir()
+    (server / ".venv" / ".installed").write_text("aiogram\n")
+    (server / "config.yaml").write_text("x: 1\n")  # настройки не в git — остаются
+
+    # Новая версия с новой библиотекой.
+    (work / "requirements.txt").write_text("aiogram\nnewlib\n")
+    sh("git", *git_env, "-C", str(work), "commit", "-q", "-am", "v2")
+    sh("git", "-C", str(work), "push", "-q", str(tmp_path / "origin.git"), "main")
+
+    calls = []
+
+    def run(cmd, **kwargs):
+        if cmd[0] == "git":
+            return subprocess.run(cmd, **kwargs)
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(updater.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(updater.shutil, "which", lambda name: f"/usr/bin/{name}")
+    before, after = updater.git_update(server, run=run, say=lambda text: None)
+    assert before != after and "newlib" in (server / "requirements.txt").read_text()
+    assert (server / ".venv" / ".installed").read_text() == "aiogram\nnewlib\n"
+    assert (server / "config.yaml").read_text() == "x: 1\n"
+    assert [c[1:4] for c in calls if "pip" in c] == [["-m", "pip", "install"]]
+    assert ["systemctl", "restart", "platesh"] in calls
+
+    calls.clear()
+    assert updater.git_update(server, run=run, say=lambda text: None) == (after, after)  # уже последняя
+    assert not any("pip" in c for c in calls)
