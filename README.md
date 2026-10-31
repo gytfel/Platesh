@@ -96,6 +96,8 @@ docker compose logs -f
 
 ## Установка на сервер (VPS)
 
+📘 **Полная инструкция для сервера** — установка, команды управления (цены, доступы, возвраты), обновление, резервные копии, удаление: [SERVER.md](SERVER.md).
+
 Самый надёжный вариант. На сервере за границей Telegram не блокируется, VPN не нужен, а Platesh работает круглосуточно, даже когда компьютер выключен.
 
 1. Арендуй VPS с **Ubuntu 22.04/24.04** (или Debian 12) в Нидерландах, Германии или Финляндии. Хватит 1 ядра и 1 ГБ памяти. Хостинг выдаст IP-адрес и пароль root.
@@ -113,7 +115,8 @@ docker compose logs -f
 | `systemctl restart platesh` | Перезапустить |
 | `systemctl stop platesh` | Остановить |
 | `cd /opt/platesh && ./run.sh setup --no-start && systemctl restart platesh` | Перенастроить |
-| та же команда установки ещё раз | Обновить Platesh (настройки сохранятся) |
+| `cd /opt/platesh && ./run.sh update` | Обновить Platesh (настройки сохранятся, служба перезапустится) |
+| `cd /opt/platesh && ./run.sh grant ID 30` | Выдать доступ на 30 дней (ещё `access`, `revoke`, `payments`, `refund` — см. [SERVER.md](SERVER.md#6-доступы-и-оплаты)) |
 
 Бот со своим кодом тоже переносится на сервер. Скопируй его папку с компьютера командой `scp -r "D:\путь\к\боту" root@IP-АДРЕС:/opt/mybot`, установи его зависимости (`python3 -m venv /opt/mybot/.venv && /opt/mybot/.venv/bin/pip install aiogram`) и в `setup` укажи путь `/opt/mybot/bot.py`.
 

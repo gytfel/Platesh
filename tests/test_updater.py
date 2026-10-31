@@ -146,3 +146,21 @@ def test_git_update_pulls_installs_and_restarts(tmp_path, monkeypatch):
     calls.clear()
     assert updater.git_update(server, run=run, say=lambda text: None) == (after, after)  # уже последняя
     assert not any("pip" in c for c in calls)
+
+
+def test_git_update_refuses_modified_files(tmp_path):
+    """После старого обновления архивом git считает файлы изменёнными — подсказываем, как починить."""
+    import subprocess
+
+    import pytest
+
+    from platesh import updater
+
+    repo = tmp_path / "server"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    (repo / "run.sh").write_text("old\n")
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(repo), "commit", "-q", "-m", "v1"], check=True)
+    (repo / "run.sh").write_text("new from zip\n")
+    with pytest.raises(updater.UpdateError, match="git reset -q --hard FETCH_HEAD"):
+        updater.git_update(repo, say=lambda text: None)

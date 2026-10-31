@@ -52,6 +52,13 @@ def git_update(target: Path, *, run: Callable[..., subprocess.CompletedProcess] 
 
     branch = git("rev-parse", "--abbrev-ref", "HEAD")
     before = git("rev-parse", "--short", "HEAD")
+    if git("status", "--porcelain", "--untracked-files=no"):
+        # Обычно после старого способа обновления (архивом): файлы новые, а git считает их изменёнными.
+        raise UpdateError(
+            "файлы программы в папке изменены, и git не может их обновить. Выполни один раз "
+            f"(настройки и база останутся): cd {target} && git fetch -q origin {branch} && "
+            "git reset -q --hard FETCH_HEAD && ./run.sh update"
+        )
     say(f"Скачиваю обновление (git, ветка {branch})...")
     git("pull", "-q", "--ff-only", "origin", branch)
     after = git("rev-parse", "--short", "HEAD")
