@@ -122,24 +122,56 @@ docker compose logs -f
 
 ## Перенос на другой сервер
 
-Переносятся настройки и базы: кто оплатил и до какого числа, а у архиватора — сохранённая переписка. Код скачивается заново.
+Переносятся настройки и базы: кто оплатил и до какого числа, а у архиватора — сохранённая переписка и подключение к Telegram Business. Код скачивается заново. Новый сервер: Ubuntu 22.04/24.04 или Debian 12, от 1 ГБ памяти.
 
-**На старом сервере:**
+Команды выполняй **по одной**: вставил строку, нажал Enter, дождался конца.
+
+**1. На старом сервере** (`ssh root@СТАРЫЙ_IP`).
+
+Останови ботов, чтобы они не работали в двух местах сразу:
 ```bash
 systemctl stop busnes-tg-perepiski platesh && systemctl disable busnes-tg-perepiski platesh
+```
+Упакуй настройки и базы в один файл:
+```bash
 cd /opt && tar czf /root/move.tgz --ignore-failed-read platesh/config.yaml platesh/.env platesh/data archiver/.env archiver/messages.db*
+```
+Отправь файл на новый сервер. Команда спросит IP нового сервера, потом `yes` и пароль root **нового** сервера:
+```bash
 read -p "IP нового сервера: " IP && scp /root/move.tgz root@$IP:/root/
 ```
+Если хостинг не дал пароль (вход только по ключу), перенеси файл через компьютер. В PowerShell на компьютере: `scp root@СТАРЫЙ_IP:/root/move.tgz .`, потом `scp move.tgz root@НОВЫЙ_IP:/root/`.
 
-**На новом сервере:**
+**2. На новом сервере** (`ssh root@НОВЫЙ_IP`).
+
 ```bash
 apt-get update && apt-get install -y git
-git clone -b claude/platesh-paywall https://github.com/gytfel/Busnes-tg-perepiski.git /opt/archiver
-tar xzf /root/move.tgz -C /opt
-curl -fsSL https://raw.githubusercontent.com/gytfel/Platesh/refs/heads/claude/beautiful-johnson-i6jquz/install.sh | bash
-cd /opt/archiver && bash install.sh && bash connect_platesh.sh
 ```
-На вопрос «config.yaml уже есть. Настроить заново?» нажми Enter: перенесённые настройки останутся.
+```bash
+git clone -b claude/platesh-paywall https://github.com/gytfel/Busnes-tg-perepiski.git /opt/archiver
+```
+```bash
+tar xzf /root/move.tgz -C /opt
+```
+```bash
+curl -fsSL https://raw.githubusercontent.com/gytfel/Platesh/refs/heads/claude/beautiful-johnson-i6jquz/install.sh | bash
+```
+На вопрос «config.yaml уже есть. Настроить заново?» нажми **Enter**: перенесённые настройки останутся.
+```bash
+cd /opt/archiver && bash install.sh
+```
+`install.sh` напишет «.env уже существует — оставляю без изменений»: так и должно быть.
+```bash
+cd /opt/archiver && bash connect_platesh.sh
+```
+В конце должно быть **«✅ Готово: платный доступ включён»**.
+
+**3. Проверь и убери за собой.**
+
+- С другого аккаунта напиши боту `/start`: должно прийти «🔒 Бот ограничен».
+- `cd /opt/platesh && ./run.sh payments` — оплаты и подписки переехали.
+- В архиве лежат токены, удали его на новом сервере: `rm /root/move.tgz`.
+- Если всё работает, старый сервер можно удалить у хостинга. Боты на нём остановлены и сами не запустятся.
 
 ## Настройка (`config.yaml`)
 
