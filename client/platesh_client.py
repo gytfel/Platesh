@@ -514,11 +514,16 @@ class PlateshClient:
                         return await handler(event, data)
                 else:
                     return await handler(event, data)
-                if user is None or (chat is not None and chat.type != "private") or user.id in exempt:
+                if user is None or (chat is not None and chat.type != "private"):
+                    return await handler(event, data)
+                if user.id in exempt:
+                    log.info("Пейволл: %s — админ или владелец, без оплаты", user.id)
                     return await handler(event, data)
                 try:
                     if await client.has_any_access(user.id, products):
+                        log.debug("Пейволл: %s — подписка есть", user.id)
                         return await handler(event, data)
+                    log.info("Пейволл: %s — подписки нет, показано предложение оплатить", user.id)
                     markup, message_text = await client.offer_markup(products), text
                 except (PlateshError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
                     log.warning("Platesh недоступен: %s", exc)
