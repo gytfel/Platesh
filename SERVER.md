@@ -73,6 +73,12 @@ cd /opt/platesh && PLATESH_BOT_TOKEN='ТОКЕН' ./run.sh bot-env
 cd /opt/archiver && bash connect_platesh.sh
 ```
 
+Скрипт заодно уберёт копию токена из Platesh: токен останется только в `/opt/archiver/.env`, а Platesh будет читать его оттуда. Для другого бота со своим кодом то же делает команда:
+
+```bash
+cd /opt/platesh && ./run.sh token-from /путь/к/боту/.env && systemctl restart platesh
+```
+
 ## 4. Каждый день: статус, журнал, перезапуск
 
 | Команда | Что делает |
@@ -192,7 +198,7 @@ cd /opt/platesh && git fetch -q origin claude/beautiful-johnson-i6jquz && git re
 
 | Строка | Что это |
 |---|---|
-| `BOT1_TOKEN`, `BOT2_TOKEN`… | токены ботов от @BotFather |
+| `BOT1_TOKEN`, `BOT2_TOKEN`… | токены ботов от @BotFather. Если токен берётся из `.env` бота (`token_from` в `config.yaml`), этой строки нет |
 | `BOT1_API_KEY`… | ключ, по которому бот со своим кодом обращается к Platesh (`PLATESH_KEY` в `.env` бота) |
 | `CRYPTOBOT_TOKEN` | токен приложения CryptoBot |
 | `PLATESH_API_KEY` | главный ключ API (им пользуются команды из раздела 6) |
@@ -206,9 +212,9 @@ cut -d= -f1 /opt/platesh/.env
 
 **Заменить токен бота**, если он засветился:
 
-1. В @BotFather: `/mybots` → бот → API Token → **Revoke current token**. Старый токен сразу перестанет работать.
-2. Впиши новый токен в Platesh: `nano /opt/platesh/.env`, строка `BOT1_TOKEN=`, потом `systemctl restart platesh`.
-3. Впиши его же в бота со своим кодом. У архиватора это `nano /opt/archiver/.env`, строка `BOT_TOKEN=`, потом `systemctl restart busnes-tg-perepiski`.
+1. В @BotFather: `/mybots` → бот → API Token → **Revoke current token**. Старый токен сразу перестанет работать. Номер до двоеточия у нового токена тот же: если он другой, это токен другого бота.
+2. **Архиватор (токен хранится только у него):** `nano /opt/archiver/.env`, строка `BOT_TOKEN=`, потом `systemctl restart platesh busnes-tg-perepiski`. Platesh возьмёт новый токен оттуда.
+3. **Если в `/opt/platesh/.env` есть строка `BOT1_TOKEN=`** (токен хранится у Platesh): впиши новый токен туда и выполни `systemctl restart platesh`. У бота со своим кодом впиши его и в его `.env`.
 
 **Заменить токен CryptoBot:** в @CryptoBot → Crypto Pay → приложение → API Token → новый токен. Потом впиши его в строку `CRYPTOBOT_TOKEN=` в `/opt/platesh/.env` и выполни `systemctl restart platesh`.
 

@@ -146,6 +146,7 @@ class BotSetup:
     script: Path | None = None
     command: str | None = None
     api_key: str = field(default_factory=lambda: secrets.token_urlsafe(32))
+    token_from: Path | None = None  # токен берётся из .env самого бота (см. token-from)
 
     @property
     def token_var(self) -> str:
@@ -230,6 +231,7 @@ class Wizard:
             "assets": crypto.accepted_assets if crypto else (),
             "bot_tokens": [b.token for b in cfg.bots],
             "bot_keys": {b.token: b.api_key for b in cfg.bots if b.api_key},
+            "token_from": {b.token: b.token_from for b in cfg.bots if b.token_from},
             "proxy": cfg.proxy,
         }
 
@@ -423,7 +425,9 @@ class Wizard:
             if b.deliver_text:
                 product["deliver"] = {"text": b.deliver_text}
             payments = [m for m, p in (("stars", b.price_stars), ("crypto", b.price_crypto)) if p is not None]
-            entry: dict = {"name": b.name, "token": f"${{{b.token_var}}}", "mode": b.mode}
+            entry: dict = {"name": b.name}
+            entry.update({"token_from": str(b.token_from)} if b.token_from else {"token": f"${{{b.token_var}}}"})
+            entry["mode"] = b.mode
             if b.mode == "external":
                 entry["api_key"] = f"${{{b.key_var}}}"
             entry["payments"] = payments
@@ -451,7 +455,8 @@ class Wizard:
             lines.append(f"CRYPTOBOT_TOKEN={crypto_token}")
         for b in bots:
             lines.append(f"# {b.label}")
-            lines.append(f"{b.token_var}={b.token}")
+            if not b.token_from:
+                lines.append(f"{b.token_var}={b.token}")
             if b.mode == "external":
                 lines.append(f"{b.key_var}={b.api_key}")
         env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -518,6 +523,8 @@ class Wizard:
                     tokens.add(bot.token)
                     # Тот же бот — тот же ключ: подключённый код бота (PLATESH_KEY в его .env) продолжит работать.
                     bot.api_key = (self.previous.get("bot_keys") or {}).get(bot.token, bot.api_key)
+                    # Токен по-прежнему берётся из .env бота — копию в .env Platesh не заводим.
+                    bot.token_from = (self.previous.get("token_from") or {}).get(bot.token)
                     bots.append(bot)
                 if not self.ask_yes("\nДобавить ещё бота?", False):
                     break

@@ -215,6 +215,7 @@ bots:
 |---|---|
 | `name` | Короткое имя латиницей. Используется в API (`"bot": "shop"`) |
 | `token` | Токен от @BotFather |
+| `token_from` | Вместо `token`: путь к `.env` бота со своим кодом, токен берётся из его строки `BOT_TOKEN=` (другое имя — `token_var`). Тогда токен хранится в одном месте. Настроить командой: `./run.sh token-from /opt/archiver/.env` |
 | `mode` | `managed` или `external` |
 | `payments` | Какие способы включены: `[stars, crypto]`, `[stars]` или `[crypto]` |
 | `admins` | Дополнительные админы этого бота (к глобальным `admins`) |

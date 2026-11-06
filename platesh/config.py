@@ -112,6 +112,7 @@ class BotConfig:
     guard: bool = True
     api_key: str | None = None
     run: RunConfig | None = None
+    token_from: Path | None = None  # токен читается из .env самого бота, своей копии у Platesh нет
 
     @property
     def managed(self) -> bool:
@@ -203,9 +204,9 @@ def weak_keys(cfg: Config) -> list[str]:
 # --------------------------------------------------------------------------- helpers
 
 
-def load_dotenv(path: Path) -> None:
-    if not path.is_file():
-        return
+def read_dotenv(path: Path) -> dict[str, str]:
+    """Строки KEY=VALUE из .env (как читает systemd: при повторе ключа побеждает последняя)."""
+    values: dict[str, str] = {}
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -215,6 +216,14 @@ def load_dotenv(path: Path) -> None:
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
             value = value[1:-1]
+        values[key] = value
+    return values
+
+
+def load_dotenv(path: Path) -> None:
+    if not path.is_file():
+        return
+    for key, value in read_dotenv(path).items():
         os.environ.setdefault(key, value)
 
 
@@ -408,6 +417,28 @@ def _run(data: Any, where: str, base_dir: Path) -> RunConfig | None:
     return RunConfig(command=parts, cwd=cwd_path)
 
 
+TOKEN_VAR = "BOT_TOKEN"
+
+
+def _bot_token(data: dict[str, Any], where: str, base_dir: Path) -> tuple[str, Path | None]:
+    """token: прямо в config.yaml / .env Platesh, или token_from: .env бота со своим кодом (строка BOT_TOKEN=)."""
+    source = data.get("token_from")
+    if source in (None, ""):
+        return _str(data, "token", where, required=True), None
+    if data.get("token"):
+        raise ConfigError(f"{where}: укажи что-то одно — token или token_from")
+    path = Path(str(source)).expanduser()
+    if not path.is_absolute():
+        path = base_dir / path
+    var = _str(data, "token_var", where, default=TOKEN_VAR)
+    if not path.is_file():
+        raise ConfigError(f"{where}.token_from: файл {path} не найден — токен бота берётся оттуда")
+    token = read_dotenv(path).get(var, "").strip()
+    if not token:
+        raise ConfigError(f"{where}.token_from: в {path} нет строки {var}=")
+    return token, path
+
+
 def _bot(data: Any, where: str, *, admins: tuple[int, ...], crypto: CryptoConfig, notify_url: str | None, base_dir: Path) -> BotConfig:
     data = _section(data, where)
     name = _str(data, "name", where, required=True)
@@ -448,9 +479,11 @@ def _bot(data: Any, where: str, *, admins: tuple[int, ...], crypto: CryptoConfig
             texts[key] = str(data[key])
 
     bot_admins = admins + tuple(a for a in _id_list(data.get("admins"), f"{where}.admins") if a not in admins)
+    token, token_from = _bot_token(data, where, base_dir)
     return BotConfig(
         name=name,
-        token=_str(data, "token", where, required=True),
+        token=token,
+        token_from=token_from,
         mode=mode,
         admins=bot_admins,
         payments=payments,
@@ -491,7 +524,7 @@ def parse_config(raw: Any, base_dir: Path) -> Config:
         raise ConfigError("bots: добавь хотя бы одного бота")
     bots: list[BotConfig] = []
     for i, raw in enumerate(raw_bots):
-        if isinstance(raw, dict) and not raw.get("token"):
+        if isinstance(raw, dict) and not raw.get("token") and not raw.get("token_from"):
             log.warning("bots[%s]: токен не задан — бот «%s» пропущен", i, raw.get("name", i))
             continue
         bot = _bot(raw, f"bots[{i}]", admins=admins, crypto=crypto, notify_url=_str(data, "notify_url", "config"), base_dir=base_dir)

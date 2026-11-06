@@ -152,12 +152,13 @@ def bot_env_lines(cfg: Config, token: str) -> str:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="platesh", description="Платёжный шлюз Stars + CryptoBot для Telegram-ботов")
     parser.add_argument("command", nargs="?", default="run",
-                        choices=["run", "check", "setup", "update", "service", "bot-env", "genkey",
+                        choices=["run", "check", "setup", "update", "service", "bot-env", "genkey", "token-from",
                                  "access", "grant", "revoke", "payments", "refund"],
                         help="run — запустить, setup — настроить (вопросы в терминале), check — проверить настройки, "
                              "update — скачать новую версию, service — работать постоянно на Linux-сервере, "
                              "bot-env — строки PLATESH_* для .env бота со своим кодом (токен — в PLATESH_BOT_TOKEN), "
-                             "genkey — придумать ключ API. Управление (Platesh должен быть запущен): "
+                             "genkey — придумать ключ API, token-from ФАЙЛ — брать токен бота из его .env "
+                             "(без копии у Platesh). Управление (Platesh должен быть запущен): "
                              "access ID — доступы пользователя, grant ID [дней] — выдать доступ, revoke ID — закрыть, "
                              "payments [ID] — последние оплаты, refund СЧЁТ — вернуть Stars")
     parser.add_argument("params", nargs="*", help="Telegram ID, число дней или номер счёта — для команд управления")
@@ -214,6 +215,19 @@ def main(argv: list[str] | None = None) -> None:
             print(bot_env_lines(load_config(args.config), os.environ.get("PLATESH_BOT_TOKEN", "")))
         except (ConfigError, LookupError) as exc:
             print(exc, file=sys.stderr)
+            sys.exit(1)
+        return
+
+    if args.command == "token-from":
+        from .token_source import TokenSourceError, use_token_from
+
+        if not args.params:
+            print("Укажи .env бота, например: ./run.sh token-from /opt/archiver/.env", file=sys.stderr)
+            sys.exit(1)
+        try:
+            print(use_token_from(config_path, Path(args.params[0]), bot_name=args.bot))
+        except TokenSourceError as exc:
+            print(f"Ошибка: {exc}", file=sys.stderr)
             sys.exit(1)
         return
 
